@@ -9,6 +9,7 @@ import LoadingIndicator from "../ui/LoadingIndicator";
 
 const WeeklyReportPage: React.FC = () => {
   const { settings } = useAppContext();
+  const [ordererName, setOrdererName] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     // 今週の月曜日を計算
     const today = new Date();
@@ -63,6 +64,24 @@ const WeeklyReportPage: React.FC = () => {
   // 曜日の短縮名
   const dayNames = ["月", "火", "水", "木", "金", "土", "日"];
 
+  // 週の日付を計算する関数（月曜始まり）
+  const getWeekDates = () => {
+    if (!report) return [];
+
+    const startDate = new Date(report.week_start);
+    const dates = [];
+
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(startDate);
+      date.setDate(startDate.getDate() + i);
+      dates.push(date);
+    }
+
+    return dates;
+  };
+
+  const weekDates = getWeekDates();
+
   return (
     <div className="card">
       <div className="card-header">
@@ -76,6 +95,18 @@ const WeeklyReportPage: React.FC = () => {
             style={{ width: "auto", display: "inline-block", margin: "0 1rem" }}
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
+          />
+          <label htmlFor="orderer-name" style={{ marginLeft: "1rem" }}>
+            発注者名:
+          </label>
+          <input
+            type="text"
+            id="orderer-name"
+            className="form-control"
+            style={{ width: "auto", display: "inline-block", margin: "0 1rem" }}
+            value={ordererName}
+            onChange={(e) => setOrdererName(e.target.value)}
+            placeholder="発注者名を入力"
           />
           <button
             className="button button-primary no-print"
@@ -96,15 +127,58 @@ const WeeklyReportPage: React.FC = () => {
                 <div className="recipient-info">
                   <strong>宛先:</strong>{" "}
                   {settings?.supplier_name || "（発注先未設定）"} 御中
+                  {settings?.supplier_address && (
+                    <div className="supplier-address">
+                      {settings.supplier_address}
+                    </div>
+                  )}
+                  {settings?.supplier_phone && (
+                    <div className="supplier-phone">
+                      TEL: {settings.supplier_phone}
+                    </div>
+                  )}
+                  {settings?.supplier_fax && (
+                    <div className="supplier-fax">
+                      FAX: {settings.supplier_fax}
+                    </div>
+                  )}
+                  {settings?.supplier_email && (
+                    <div className="supplier-email">
+                      Email: {settings.supplier_email}
+                    </div>
+                  )}
                 </div>
                 <div className="sender-info">
                   <strong>発注元:</strong>{" "}
                   {settings?.garden_name || "（施設名未設定）"}
+                  {settings?.garden_address && (
+                    <div className="garden-address">
+                      {settings.garden_address}
+                    </div>
+                  )}
+                  {settings?.garden_phone && (
+                    <div className="garden-phone">
+                      TEL: {settings.garden_phone}
+                    </div>
+                  )}
+                  {settings?.garden_fax && (
+                    <div className="garden-fax">FAX: {settings.garden_fax}</div>
+                  )}
+                  {settings?.garden_email && (
+                    <div className="garden-email">
+                      Email: {settings.garden_email}
+                    </div>
+                  )}
                 </div>
               </div>
               <h3>発注書</h3>
               <div className="report-period">
                 対象期間: {getPeriodDisplay()}
+              </div>
+              <div className="standard-message">
+                <p>いつもお世話になっております。</p>
+                <p>下記の通り、{getPeriodDisplay()}の弁当を発注いたします。</p>
+                <p>ご確認のほど、よろしくお願い申し上げます。</p>
               </div>
             </div>
 
@@ -123,9 +197,13 @@ const WeeklyReportPage: React.FC = () => {
                     </th>
                   </tr>
                   <tr>
-                    {dayNames.map((day) => (
+                    {dayNames.map((day, index) => (
                       <th key={day} className="day-header">
                         {day}
+                        <br />
+                        {weekDates[index]
+                          ? formatDate(weekDates[index].toISOString())
+                          : ""}
                       </th>
                     ))}
                   </tr>
@@ -163,10 +241,7 @@ const WeeklyReportPage: React.FC = () => {
             <div className="report-footer">
               <div className="footer-info">
                 <p>発注日: {new Date().toLocaleDateString("ja-JP")}</p>
-                <p>発注者: {settings?.garden_name || "（施設名未設定）"}</p>
-                {settings?.garden_address && (
-                  <p>住所: {settings.garden_address}</p>
-                )}
+                <p>発注者: {ordererName || "（未入力）"}</p>
               </div>
             </div>
           </>

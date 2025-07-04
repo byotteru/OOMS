@@ -97,6 +97,51 @@ const SettingsPage: React.FC = () => {
                 }
               />
             </div>
+            <div className="form-group">
+              <label htmlFor="garden-phone" className="form-label">
+                電話番号
+              </label>
+              <input
+                type="tel"
+                id="garden-phone"
+                className="form-control"
+                placeholder="例: 03-1234-5678"
+                value={formData.garden_phone || ""}
+                onChange={(e) =>
+                  handleInputChange("garden_phone", e.target.value)
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="garden-fax" className="form-label">
+                FAX
+              </label>
+              <input
+                type="tel"
+                id="garden-fax"
+                className="form-control"
+                placeholder="例: 03-1234-5679"
+                value={formData.garden_fax || ""}
+                onChange={(e) =>
+                  handleInputChange("garden_fax", e.target.value)
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="garden-email" className="form-label">
+                メールアドレス
+              </label>
+              <input
+                type="email"
+                id="garden-email"
+                className="form-control"
+                placeholder="例: info@example.com"
+                value={formData.garden_email || ""}
+                onChange={(e) =>
+                  handleInputChange("garden_email", e.target.value)
+                }
+              />
+            </div>
           </div>
 
           <div className="settings-section">
@@ -146,6 +191,51 @@ const SettingsPage: React.FC = () => {
                 value={formData.supplier_phone || ""}
                 onChange={(e) =>
                   handleInputChange("supplier_phone", e.target.value)
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="supplier-fax" className="form-label">
+                FAX
+              </label>
+              <input
+                type="tel"
+                id="supplier-fax"
+                className="form-control"
+                placeholder="例: 03-1234-5679"
+                value={formData.supplier_fax || ""}
+                onChange={(e) =>
+                  handleInputChange("supplier_fax", e.target.value)
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="supplier-email" className="form-label">
+                メールアドレス
+              </label>
+              <input
+                type="email"
+                id="supplier-email"
+                className="form-control"
+                placeholder="例: info@supplier.com"
+                value={formData.supplier_email || ""}
+                onChange={(e) =>
+                  handleInputChange("supplier_email", e.target.value)
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="supplier-website" className="form-label">
+                Webサイト
+              </label>
+              <input
+                type="url"
+                id="supplier-website"
+                className="form-control"
+                placeholder="例: https://www.supplier.com"
+                value={formData.supplier_website || ""}
+                onChange={(e) =>
+                  handleInputChange("supplier_website", e.target.value)
                 }
               />
             </div>

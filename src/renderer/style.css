@@ -789,12 +789,17 @@ body {
 .order-select {
   font-size: 0.8rem;
   margin-bottom: 0.25rem;
+  width: 100%;
+  max-width: 140px;
+  display: inline-block;
 }
 
 .quantity-input {
   width: 60px;
   font-size: 0.8rem;
   text-align: center;
+  margin: 0 auto;
+  display: block;
 }
 
 .week-display {

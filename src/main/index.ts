@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { autoUpdater } from "electron-updater"; // 自動更新機能のため追加
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
@@ -53,6 +54,10 @@ async function main(): Promise<void> {
   dbManager = await DatabaseManager.getInstance(dbPath);
   console.log("Main: Database manager initialized successfully");
 
+  // 自動更新の設定
+  setupAutoUpdater();
+  console.log("Main: Auto updater set up successfully");
+
   // IPCハンドラーの設定
   setupIpcHandlers();
   console.log("Main: IPC handlers set up successfully");
@@ -62,9 +67,77 @@ async function main(): Promise<void> {
   console.log("Main: Main window created successfully");
 }
 
+// 自動更新の設定とイベントハンドラー
+function setupAutoUpdater(): void {
+  // 更新チェックのロギング
+  autoUpdater.logger = console;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  // 利用可能な更新を確認中
+  autoUpdater.on("checking-for-update", () => {
+    console.log("更新を確認中...");
+  });
+
+  // 更新が見つからなかった
+  autoUpdater.on("update-not-available", (info) => {
+    console.log("更新はありません", info);
+  });
+
+  // 更新が見つかった
+  autoUpdater.on("update-available", (info) => {
+    console.log("新しいバージョンが見つかりました:", info);
+    // メインウィンドウに更新情報を表示（オプション）
+    if (mainWindow) {
+      mainWindow.webContents.send("update-available", info);
+    }
+  });
+
+  // 更新のダウンロード進捗
+  autoUpdater.on("download-progress", (progressObj) => {
+    const message = `ダウンロード速度: ${progressObj.bytesPerSecond} - ダウンロード済み: ${progressObj.percent}% (${progressObj.transferred}/${progressObj.total})`;
+    console.log(message);
+    // メインウィンドウに進捗を表示（オプション）
+    if (mainWindow) {
+      mainWindow.webContents.send("download-progress", progressObj);
+    }
+  });
+
+  // 更新のダウンロード完了
+  autoUpdater.on("update-downloaded", (info) => {
+    console.log("更新のダウンロードが完了しました", info);
+    // ユーザーに通知して再起動を促す（オプション）
+    dialog
+      .showMessageBox({
+        type: "info",
+        title: "アップデートの準備が完了しました",
+        message: `バージョン ${info.version} のインストールの準備が完了しました。アプリを再起動して更新を適用します。`,
+        buttons: ["再起動", "後で"],
+      })
+      .then((returnValue) => {
+        if (returnValue.response === 0) {
+          autoUpdater.quitAndInstall();
+        }
+      });
+  });
+
+  // エラーハンドリング
+  autoUpdater.on("error", (error) => {
+    console.error("自動更新中にエラーが発生しました:", error);
+  });
+}
+
 // アプリケーションの初期化
 app.whenReady().then(async () => {
   await main();
+
+  // 開発環境ではない場合のみ自動更新をチェック
+  if (!isDev) {
+    autoUpdater.checkForUpdatesAndNotify();
+    console.log("自動更新のチェックを開始しました");
+  } else {
+    console.log("開発環境のため、自動更新はスキップされます");
+  }
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -78,19 +151,17 @@ app.on("window-all-closed", () => {
   console.log("Window-all-closed: データベースのクローズを開始します...");
 
   if (dbManager) {
-    dbManager
-      .close()
-      .then(() =>
-        console.log(
-          "Window-all-closed: データベースのクローズ処理が正常に完了しました。"
-        )
-      )
-      .catch((err) =>
-        console.error(
-          "Window-all-closed: データベースのクローズ中にエラーが発生しました:",
-          err
-        )
+    try {
+      dbManager.close();
+      console.log(
+        "Window-all-closed: データベースのクローズ処理が正常に完了しました。"
       );
+    } catch (err) {
+      console.error(
+        "Window-all-closed: データベースのクローズ中にエラーが発生しました:",
+        err
+      );
+    }
   }
 
   if (process.platform !== "darwin") {
@@ -103,19 +174,17 @@ app.on("before-quit", () => {
   console.log("Before-quit: データベースのクローズを開始します...");
 
   if (dbManager) {
-    dbManager
-      .close()
-      .then(() =>
-        console.log(
-          "Before-quit: データベースのクローズ処理が正常に完了しました。"
-        )
-      )
-      .catch((err) =>
-        console.error(
-          "Before-quit: データベースのクローズ中にエラーが発生しました:",
-          err
-        )
+    try {
+      dbManager.close();
+      console.log(
+        "Before-quit: データベースのクローズ処理が正常に完了しました。"
       );
+    } catch (err) {
+      console.error(
+        "Before-quit: データベースのクローズ中にエラーが発生しました:",
+        err
+      );
+    }
   }
 });
 
@@ -127,19 +196,18 @@ app.on("will-quit", () => {
 
   // シングルトンのインスタンスが存在する場合のみクローズを試行
   if (DatabaseManager.hasInstance()) {
-    DatabaseManager.getInstance()
-      .then((dbManager) => dbManager.close())
-      .then(() =>
-        console.log(
-          "Will-quit: データベースのクローズ処理が正常に完了しました。"
-        )
-      )
-      .catch((err) =>
-        console.error(
-          "Will-quit: データベースのクローズ中に致命的なエラーが発生しました:",
-          err
-        )
+    try {
+      const dbManager = DatabaseManager.getInstance();
+      dbManager.close();
+      console.log(
+        "Will-quit: データベースのクローズ処理が正常に完了しました。"
       );
+    } catch (err: any) {
+      console.error(
+        "Will-quit: データベースのクローズ中に致命的なエラーが発生しました:",
+        err
+      );
+    }
   } else {
     console.log(
       "Will-quit: データベースインスタンスが存在しないため、クローズ処理をスキップします。"
@@ -173,7 +241,8 @@ function setupIpcHandlers(): void {
     async (_, name: string, displayOrder?: number) => {
       try {
         const db = ensureDbManager();
-        await db.addStaff(name, displayOrder);
+        db.addStaff(name, displayOrder);
+        return { success: true };
       } catch (error) {
         console.error("スタッフ追加エラー:", error);
         throw error;
@@ -278,7 +347,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle("add-order", async (_, orderData) => {
     try {
       const db = ensureDbManager();
-      await db.addOrder(orderData);
+      db.addOrder(orderData);
     } catch (error) {
       console.error("注文追加エラー:", error);
       throw error;
@@ -288,7 +357,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle("delete-order", async (_, orderId: number) => {
     try {
       const db = ensureDbManager();
-      await db.deleteOrder(orderId);
+      db.deleteOrder(orderId);
     } catch (error) {
       console.error("注文削除エラー:", error);
       throw error;
@@ -330,7 +399,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle("save-settings", async (_, settings) => {
     try {
       const db = ensureDbManager();
-      await db.saveSettings(settings);
+      db.saveSettings(settings);
     } catch (error) {
       console.error("設定保存エラー:", error);
       throw error;
@@ -400,36 +469,10 @@ function setupIpcHandlers(): void {
   });
 
   // 認証関連（設計書Ver.5.0準拠）
-  ipcMain.handle("login", async (_, email: string, password: string) => {
-    try {
-      const db = ensureDbManager();
-      return await db.login(email, password);
-    } catch (error) {
-      console.error("ログインエラー:", error);
-      if (error instanceof Error && error.message === "AUTH_FAILED") {
-        throw {
-          code: "AUTH_FAILED",
-          message: "メールアドレスまたはパスワードが正しくありません。",
-        };
-      }
-      throw error;
-    }
-  });
-
-  ipcMain.handle("get-current-user", async (_, userId: number) => {
-    try {
-      const db = ensureDbManager();
-      return await db.getCurrentUser(userId);
-    } catch (error) {
-      console.error("現在のユーザー取得エラー:", error);
-      throw error;
-    }
-  });
-
   ipcMain.handle("get-users", async () => {
     try {
       const db = ensureDbManager();
-      return await db.getUsers();
+      return db.getUsers(); // awaitを削除（同期メソッドになったため）
     } catch (error) {
       console.error("ユーザー取得エラー:", error);
       throw error;
@@ -480,7 +523,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle("delete-user", async (_, id: number) => {
     try {
       const db = ensureDbManager();
-      await db.deleteUser(id);
+      db.deleteUser(id); // awaitを削除（同期メソッドになったため）
     } catch (error) {
       console.error("ユーザー削除エラー:", error);
       throw error;

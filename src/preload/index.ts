@@ -15,12 +15,6 @@ import {
 
 // レンダラープロセスに公開するAPI
 const api = {
-  // 認証関連（設計書Ver.5.0準拠）
-  login: (email: string, password: string): Promise<User> =>
-    ipcRenderer.invoke("login", email, password),
-  getCurrentUser: (userId: number): Promise<User> =>
-    ipcRenderer.invoke("get-current-user", userId),
-
   // ユーザー管理
   getUsers: (): Promise<User[]> => ipcRenderer.invoke("get-users"),
   addUser: (

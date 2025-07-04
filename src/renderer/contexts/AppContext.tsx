@@ -47,15 +47,29 @@ export interface ItemOption {
 export interface Settings {
   garden_name?: string;
   garden_address?: string;
+  garden_phone?: string;
+  garden_fax?: string;
+  garden_email?: string;
+  garden_website?: string;
   supplier_name?: string;
   supplier_address?: string;
   supplier_phone?: string;
+  supplier_fax?: string;
+  supplier_email?: string;
+  supplier_website?: string;
   // キャメルケースでもアクセス可能
   gardenName?: string;
   gardenAddress?: string;
+  gardenPhone?: string;
+  gardenFax?: string;
+  gardenEmail?: string;
+  gardenWebsite?: string;
   supplierName?: string;
   supplierAddress?: string;
   supplierPhone?: string;
+  supplierFax?: string;
+  supplierEmail?: string;
+  supplierWebsite?: string;
   [key: string]: string | undefined;
 }
 

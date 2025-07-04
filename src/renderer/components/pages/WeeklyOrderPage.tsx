@@ -279,7 +279,7 @@ const WeeklyOrderPage: React.FC = () => {
                     return (
                       <td key={day.date} className="order-cell">
                         <select
-                          className="form-control order-select"
+                          className="order-select form-control"
                           value={order?.item_id || ""}
                           onChange={(e) => {
                             const itemId = e.target.value
@@ -300,7 +300,7 @@ const WeeklyOrderPage: React.FC = () => {
                         {order && (
                           <input
                             type="number"
-                            className="form-control quantity-input mt-1"
+                            className="quantity-input form-control mt-1"
                             min="1"
                             max="10"
                             value={order.quantity}

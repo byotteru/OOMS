@@ -129,13 +129,34 @@ const StaffMasterPage: React.FC = () => {
 
   // ステータス切り替え
   const handleToggleStatus = async (staff: Staff) => {
+    console.log("🔄 無効化/有効化ボタンがクリックされました:", {
+      id: staff.id,
+      name: staff.name,
+    });
     const newStatus = staff.is_active ? 0 : 1;
     try {
-      await window.api.updateStaff(
-        staff.id,
-        staff.name,
-        newStatus,
-        staff.display_order
+      // ユーザーテーブルの更新に切り替え - deleteUserで論理削除を行う
+      if (newStatus === 0) {
+        console.log("🔄 deleteUser API呼び出し開始...", staff.id);
+        await window.api.deleteUser(staff.id);
+        console.log("✅ deleteUser API呼び出し成功");
+      } else {
+        // 有効化の場合はupdateStaffを使用（ユーザーの有効化はupdateUserで行うべきだが
+        // 既存コードとの互換性のため残す）
+        console.log("🔄 updateStaff API呼び出し開始...", staff.id);
+        await window.api.updateStaff(
+          staff.id,
+          staff.name,
+          newStatus,
+          staff.display_order
+        );
+        console.log("✅ updateStaff API呼び出し成功");
+      }
+
+      await showApiSuccess(
+        newStatus === 0
+          ? "スタッフを無効化しました"
+          : "スタッフを有効化しました"
       );
       await refreshStaff(); // 設計書通りの状態同期
     } catch (error) {

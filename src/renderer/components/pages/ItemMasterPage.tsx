@@ -34,7 +34,7 @@ const ItemMasterPage: React.FC = () => {
     setEditingItem(null);
     setFormData({
       name: "",
-      price: 0,
+      price: 0, // データモデルとしては0を維持
       is_active: 1,
       display_order: itemList.length + 1,
     });
@@ -272,10 +272,16 @@ const ItemMasterPage: React.FC = () => {
               className="form-control"
               min="0"
               step="1"
-              value={formData.price}
-              onChange={(e) =>
-                handleInputChange("price", parseInt(e.target.value, 10) || 0)
-              }
+              value={formData.price > 0 ? formData.price : ""}
+              placeholder="価格を入力してください"
+              onClick={(e) => (e.target as HTMLInputElement).select()}
+              onFocus={(e) => (e.target as HTMLInputElement).select()}
+              onChange={(e) => {
+                const value = e.target.value;
+                // 空の場合は0として扱う
+                const numValue = value === "" ? 0 : parseInt(value, 10) || 0;
+                handleInputChange("price", numValue);
+              }}
               required
             />
           </div>
@@ -284,13 +290,21 @@ const ItemMasterPage: React.FC = () => {
             <input
               type="number"
               className="form-control"
-              value={formData.display_order || ""}
-              onChange={(e) =>
-                handleInputChange(
-                  "display_order",
-                  parseInt(e.target.value, 10) || 0
-                )
+              min="0"
+              value={
+                formData.display_order && formData.display_order > 0
+                  ? formData.display_order
+                  : ""
               }
+              placeholder="表示順を入力してください"
+              onClick={(e) => (e.target as HTMLInputElement).select()}
+              onFocus={(e) => (e.target as HTMLInputElement).select()}
+              onChange={(e) => {
+                const value = e.target.value;
+                // 空の場合は0として扱う
+                const numValue = value === "" ? 0 : parseInt(value, 10) || 0;
+                handleInputChange("display_order", numValue);
+              }}
             />
           </div>
           <div className="form-group">

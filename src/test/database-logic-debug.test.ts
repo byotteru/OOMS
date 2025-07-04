@@ -9,16 +9,16 @@ describe("データベース層ロジック検証", () => {
   let db: DatabaseManager;
   const testDbPath = ":memory:"; // インメモリDBを使用
 
-  beforeAll(async () => {
+  beforeAll(() => {
     // テスト用データベースを初期化
-    db = await DatabaseManager.getInstance(testDbPath);
+    db = DatabaseManager.getInstance(testDbPath);
   });
 
   describe("基本データの確認", () => {
-    it("初期データが正しく挿入されている", async () => {
-      const users = await db.getUsers();
-      const staff = await db.getStaff();
-      const items = await db.getItems();
+    it("初期データが正しく挿入されている", () => {
+      const users = db.getUsers();
+      const staff = db.getStaff();
+      const items = db.getItems();
 
       console.log("=== 初期データ確認 ===");
       console.log("Users:", users);

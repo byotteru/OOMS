@@ -1,9 +1,9 @@
 /*C:\Users\byott\Documents\OOMS\src\main\database.ts*/
 
-import sqlite3 from "sqlite3";
-import { Database } from "sqlite3";
-import { promisify } from "util";
-import bcrypt from "bcrypt";
+import Database from "better-sqlite3";
+import * as bcrypt from "bcrypt";
+import { app } from "electron";
+import path from "path";
 
 // 設計書Ver.5.0準拠の型定義
 export interface User {
@@ -12,6 +12,7 @@ export interface User {
   email: string;
   password_hash?: string; // レスポンス時は除外
   role_id: number;
+  role_name?: string; // JOINで取得される場合に使用
   is_active: number;
   display_order?: number;
 }
@@ -167,41 +168,31 @@ export interface WeeklySavePayload {
 
 export class DatabaseManager {
   private static instance: DatabaseManager | null = null;
-  private static initPromise: Promise<DatabaseManager> | null = null;
-  private db!: Database; // 初期化をconnect()で行うため、definite assignment assertionを使用
+  private db!: Database.Database; // better-sqlite3の型定義を使用
 
   private constructor(private dbPath: string) {
     // コンストラクタをプライベートにして直接インスタンス化を防ぐ
   }
 
-  static async getInstance(
-    dbPath: string = "ooms.db"
-  ): Promise<DatabaseManager> {
+  static getInstance(dbPath: string = "ooms.db"): DatabaseManager {
     if (DatabaseManager.instance) {
       return DatabaseManager.instance;
     }
 
-    if (DatabaseManager.initPromise) {
-      return DatabaseManager.initPromise;
-    }
-
-    DatabaseManager.initPromise = DatabaseManager.createInstance(dbPath);
-    return DatabaseManager.initPromise;
+    return DatabaseManager.createInstance(dbPath);
   }
 
   static hasInstance(): boolean {
     return DatabaseManager.instance !== null;
   }
 
-  private static async createInstance(
-    dbPath: string
-  ): Promise<DatabaseManager> {
+  private static createInstance(dbPath: string): DatabaseManager {
     console.log("DatabaseManager: Creating new instance...");
     const instance = new DatabaseManager(dbPath);
     console.log("DatabaseManager: Connecting to database...");
-    await instance.connect();
+    instance.connect(); // 同期的なconnect
     console.log("DatabaseManager: Initializing database...");
-    await instance.initializeDatabase();
+    instance.initializeDatabase(); // 同期的なinitializeDatabase
     console.log(
       "DatabaseManager: Database initialization completed successfully!"
     );
@@ -209,21 +200,22 @@ export class DatabaseManager {
     return instance;
   }
 
-  private async connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.db = new sqlite3.Database(this.dbPath, (err) => {
-        if (err) {
-          console.error("データベース接続エラー:", err);
-          reject(err);
-        } else {
-          console.log("データベースに接続しました");
-          resolve();
-        }
-      });
-    });
+  private connect(): void {
+    try {
+      // better-sqlite3は同期的にデータベース接続を行う
+      this.db = new Database(this.dbPath);
+      // WALモードを有効にしてパフォーマンスを向上
+      this.db.pragma("journal_mode = WAL");
+      // 外部キー制約を有効化
+      this.db.pragma("foreign_keys = ON");
+      console.log("データベースに接続しました");
+    } catch (err) {
+      console.error("データベース接続エラー:", err);
+      throw err;
+    }
   }
 
-  private async initializeDatabase(): Promise<void> {
+  private initializeDatabase(): void {
     console.log("DatabaseManager: Starting table creation...");
     const createTables = [
       // 設計書Ver.5.0準拠のテーブル定義
@@ -304,21 +296,22 @@ export class DatabaseManager {
       )`,
     ];
 
+    // better-sqlite3では同期的にSQL実行
     for (const sql of createTables) {
-      await this.run(sql);
+      this.db.exec(sql);
     }
     console.log("DatabaseManager: Tables created successfully");
 
     // インデックス作成
-    await this.createIndexes();
+    this.createIndexes();
     console.log("DatabaseManager: Indexes created successfully");
 
     // 初期データの挿入
-    await this.insertInitialData();
+    this.insertInitialData();
     console.log("DatabaseManager: Initial data inserted successfully");
   }
 
-  private async createIndexes(): Promise<void> {
+  private createIndexes(): void {
     const indexes = [
       `CREATE INDEX IF NOT EXISTS idx_orders_order_date ON orders(order_date)`,
       `CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)`,
@@ -331,89 +324,76 @@ export class DatabaseManager {
     ];
 
     for (const sql of indexes) {
-      await this.run(sql);
+      this.db.exec(sql);
     }
   }
 
-  private async insertInitialData(): Promise<void> {
+  private insertInitialData(): void {
     // ロールの初期データ
-    const roleCount = await this.get("SELECT COUNT(*) as count FROM roles");
+    const roleCount = this.db
+      .prepare("SELECT COUNT(*) as count FROM roles")
+      .get() as { count: number };
     if (roleCount.count === 0) {
-      await this.run("INSERT INTO roles (id, name) VALUES (1, 'Admin')");
-      await this.run("INSERT INTO roles (id, name) VALUES (2, 'User')");
+      this.db.prepare("INSERT INTO roles (id, name) VALUES (1, 'Admin')").run();
+      this.db.prepare("INSERT INTO roles (id, name) VALUES (2, 'User')").run();
     }
 
     // デフォルト管理者アカウントの作成
-    const userCount = await this.get("SELECT COUNT(*) as count FROM users");
+    const userCount = this.db
+      .prepare("SELECT COUNT(*) as count FROM users")
+      .get() as { count: number };
     if (userCount.count === 0) {
-      const passwordHash = await bcrypt.hash("admin123", 10);
-      await this.run(
-        "INSERT INTO users (name, email, password_hash, role_id, display_order) VALUES (?, ?, ?, 1, 1)",
-        ["管理者", "admin@example.com", passwordHash]
-      );
+      const passwordHash = bcrypt.hashSync("admin123", 10); // 同期版を使用
+      this.db
+        .prepare(
+          "INSERT INTO users (name, email, password_hash, role_id, display_order) VALUES (?, ?, ?, 1, 1)"
+        )
+        .run(["管理者", "admin@example.com", passwordHash]);
     }
 
     // スタッフデータの移行（staffテーブル → usersテーブル）
-    await this.migrateStaffToUsers();
-
-    // スタッフの初期データ（後方互換性 - 新規インストール時のみ）
-    const staffCount = await this.get("SELECT COUNT(*) as count FROM staff");
-    if (staffCount.count === 0) {
-      const staffData = [
-        { name: "スタッフA", display_order: 1 },
-        { name: "スタッフB", display_order: 2 },
-        { name: "スタッフC", display_order: 3 },
-      ];
-
-      for (const staff of staffData) {
-        await this.run(
-          "INSERT INTO staff (name, display_order) VALUES (?, ?)",
-          [staff.name, staff.display_order]
-        );
-      }
-    }
+    this.migrateStaffToUsers();
 
     // 弁当の初期データ
-    const itemCount = await this.get("SELECT COUNT(*) as count FROM items");
+    const itemCount = this.db
+      .prepare("SELECT COUNT(*) as count FROM items")
+      .get() as { count: number };
     if (itemCount.count === 0) {
       const itemData = [
         { name: "テスト弁当1", price: 500, display_order: 1 },
         { name: "テスト弁当2", price: 600, display_order: 2 },
       ];
 
+      const insertItem = this.db.prepare(
+        "INSERT INTO items (name, price, display_order) VALUES (?, ?, ?)"
+      );
       for (const item of itemData) {
-        await this.run(
-          "INSERT INTO items (name, price, display_order) VALUES (?, ?, ?)",
-          [item.name, item.price, item.display_order]
-        );
+        insertItem.run([item.name, item.price, item.display_order]);
       }
     }
   }
 
   // スタッフデータの移行処理
-  private async migrateStaffToUsers(): Promise<void> {
+  private migrateStaffToUsers(): void {
     // 既存のstaffデータをusersテーブルに移行する
     console.log("DatabaseManager: スタッフデータの移行を開始...");
 
     try {
       // staffテーブルのデータを取得
-      const staffMembers = await this.all(
-        "SELECT * FROM staff WHERE is_active = 1"
-      );
+      const staffMembers = this.all("SELECT * FROM staff WHERE is_active = 1");
 
       for (const staff of staffMembers) {
         // 同名のユーザーが既に存在するかチェック
-        const existingUser = await this.get(
-          "SELECT id FROM users WHERE name = ?",
-          [staff.name]
-        );
+        const existingUser = this.get("SELECT id FROM users WHERE name = ?", [
+          staff.name,
+        ]);
 
         if (!existingUser) {
           // 存在しない場合は新規作成
           const defaultEmail = `${staff.name.replace(/\s+/g, "")}@ooms.local`;
-          const defaultPassword = await bcrypt.hash("staff123", 10);
+          const defaultPassword = bcrypt.hashSync("staff123", 10); // 同期版使用
 
-          await this.run(
+          this.run(
             `INSERT INTO users (name, email, password_hash, role_id, is_active, display_order) 
              VALUES (?, ?, ?, 2, ?, ?)`,
             [
@@ -438,38 +418,46 @@ export class DatabaseManager {
     }
   }
 
+  // better-sqlite3用の同期メソッド
   private run(
     sql: string,
     params: any[] = []
-  ): Promise<{ lastID?: number; changes?: number }> {
-    return new Promise((resolve, reject) => {
-      this.db.run(sql, params, function (err) {
-        if (err) reject(err);
-        else resolve({ lastID: this.lastID, changes: this.changes });
-      });
-    });
+  ): { lastInsertRowid?: number; changes?: number } {
+    try {
+      const stmt = this.db.prepare(sql);
+      const result = stmt.run(params);
+      return {
+        lastInsertRowid: result.lastInsertRowid as number,
+        changes: result.changes,
+      };
+    } catch (error) {
+      console.error("SQL実行エラー:", error, "SQL:", sql, "Params:", params);
+      throw error;
+    }
   }
 
-  private get(sql: string, params: any[] = []): Promise<any> {
-    return new Promise((resolve, reject) => {
-      this.db.get(sql, params, (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
+  private get(sql: string, params: any[] = []): any {
+    try {
+      const stmt = this.db.prepare(sql);
+      return stmt.get(params);
+    } catch (error) {
+      console.error("SQL取得エラー:", error, "SQL:", sql, "Params:", params);
+      throw error;
+    }
   }
 
-  private all(sql: string, params: any[] = []): Promise<any[]> {
-    return new Promise((resolve, reject) => {
-      this.db.all(sql, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows);
-      });
-    });
+  private all(sql: string, params: any[] = []): any[] {
+    try {
+      const stmt = this.db.prepare(sql);
+      return stmt.all(params);
+    } catch (error) {
+      console.error("SQL全取得エラー:", error, "SQL:", sql, "Params:", params);
+      throw error;
+    }
   }
 
   // テスト用デバッグメソッド（本番環境では使用しない）
-  async debugQuery(sql: string, params: any[] = []): Promise<any[]> {
+  debugQuery(sql: string, params: any[] = []): any[] {
     if (process.env.NODE_ENV !== "test") {
       throw new Error("debugQuery is only available in test environment");
     }
@@ -477,82 +465,86 @@ export class DatabaseManager {
   }
 
   // スタッフ関連
-  async getStaff(): Promise<Staff[]> {
-    return await this.all(
-      "SELECT * FROM staff WHERE is_active = 1 ORDER BY display_order, name"
+  getStaff(): Staff[] {
+    // スタッフとしては一般的にrole_id=2のユーザーを返す
+    return this.all(
+      "SELECT id, name, is_active, display_order FROM users WHERE role_id = 2 ORDER BY display_order, name"
     );
   }
 
-  async addStaff(name: string, displayOrder?: number): Promise<void> {
-    await this.run("INSERT INTO staff (name, display_order) VALUES (?, ?)", [
-      name,
-      displayOrder,
-    ]);
+  addStaff(name: string, displayOrder?: number): void {
+    // 仕様変更: staffテーブルではなくusersテーブルにスタッフ情報を追加
+    // 標準roleId=2（スタッフ）、is_active=1（有効）でユーザーを作成
+    const stmt = this.db.prepare(
+      "INSERT INTO users (name, email, password_hash, role_id, is_active, display_order) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    const passwordHash = bcrypt.hashSync("password123", 10); // デフォルトパスワード
+    const email = `${name.replace(/\s+/g, "")}@ooms.local`; // スペースを除去して簡易メールアドレス生成
+    stmt.run(name, email, passwordHash, 2, 1, displayOrder);
+
+    this.addAuditLog(null, "CREATE", "users", null, {
+      message: `スタッフ追加: ${name}`,
+    });
   }
 
-  async updateStaff(
+  updateStaff(
     id: number,
     name: string,
     isActive: number,
     displayOrder?: number
-  ): Promise<void> {
-    await this.run(
+  ): void {
+    this.run(
       "UPDATE staff SET name = ?, is_active = ?, display_order = ? WHERE id = ?",
       [name, isActive, displayOrder, id]
     );
   }
 
-  async deleteStaff(id: number): Promise<void> {
-    await this.run("UPDATE staff SET is_active = 0 WHERE id = ?", [id]);
+  deleteStaff(id: number): void {
+    this.run("UPDATE staff SET is_active = 0 WHERE id = ?", [id]);
   }
 
   // 弁当関連
-  async getItems(): Promise<Item[]> {
-    const items = await this.all(
+  getItems(): Item[] {
+    const items = this.all(
       "SELECT * FROM items WHERE is_active = 1 ORDER BY display_order, name"
     );
 
     // 各アイテムのオプションを取得
     for (const item of items) {
-      item.options = await this.all(
-        "SELECT * FROM item_options WHERE item_id = ?",
-        [item.id]
-      );
+      item.options = this.all("SELECT * FROM item_options WHERE item_id = ?", [
+        item.id,
+      ]);
     }
 
     return items;
   }
 
-  async addItem(
-    name: string,
-    price: number,
-    displayOrder?: number
-  ): Promise<void> {
-    await this.run(
+  addItem(name: string, price: number, displayOrder?: number): void {
+    this.run(
       "INSERT INTO items (name, price, display_order) VALUES (?, ?, ?)",
       [name, price, displayOrder]
     );
   }
 
-  async updateItem(
+  updateItem(
     id: number,
     name: string,
     price: number,
     isActive: number,
     displayOrder?: number
-  ): Promise<void> {
-    await this.run(
+  ): void {
+    this.run(
       "UPDATE items SET name = ?, price = ?, is_active = ?, display_order = ? WHERE id = ?",
       [name, price, isActive, displayOrder, id]
     );
   }
 
-  async deleteItem(id: number): Promise<void> {
-    await this.run("UPDATE items SET is_active = 0 WHERE id = ?", [id]);
+  deleteItem(id: number): void {
+    this.run("UPDATE items SET is_active = 0 WHERE id = ?", [id]);
   }
 
   // 注文関連
-  async getOrdersByDate(date: string): Promise<OrderView[]> {
+  getOrdersByDate(date: string): OrderView[] {
     const sql = `
       SELECT 
         o.id,
@@ -576,152 +568,97 @@ export class DatabaseManager {
       ORDER BY u.display_order, u.name, i.display_order, i.name
     `;
 
-    const rows = await this.all(sql, [date]);
+    const rows = this.all(sql, [date]);
     return rows.map((row) => ({
       ...row,
       options: row.options ? row.options.split(",") : [],
     }));
   }
 
-  async addOrder(orderData: NewOrder): Promise<void> {
+  addOrder(orderData: NewOrder): void {
     const db = this.db;
 
-    return new Promise((resolve, reject) => {
-      db.serialize(() => {
-        db.run("BEGIN TRANSACTION");
+    const transaction = db.transaction(() => {
+      // 注文を挿入（user_id対応）
+      const orderStmt = db.prepare(
+        "INSERT INTO orders (order_date, user_id) VALUES (?, ?)"
+      );
+      const orderResult = orderStmt.run(
+        orderData.order_date,
+        orderData.user_id
+      );
+      const orderId = orderResult.lastInsertRowid as number;
 
-        // 注文を挿入（user_id対応）
-        db.run(
-          "INSERT INTO orders (order_date, user_id) VALUES (?, ?)",
-          [orderData.order_date, orderData.user_id],
-          function (err) {
-            if (err) {
-              db.run("ROLLBACK");
-              reject(err);
-              return;
-            }
+      // 監査ログに記録
+      const auditStmt = db.prepare(
+        "INSERT INTO audit_logs (user_id, action, target_entity, target_id, details) VALUES (?, ?, ?, ?, ?)"
+      );
+      auditStmt.run(
+        orderData.user_id,
+        "ORDER_CREATE",
+        "orders",
+        orderId,
+        JSON.stringify({
+          order_date: orderData.order_date,
+          items_count: orderData.items.length,
+        })
+      );
 
-            const orderId = this.lastID;
-            let completed = 0;
+      // 注文詳細を挿入
+      const orderDetailStmt = db.prepare(
+        "INSERT INTO order_details (order_id, item_id, quantity, remarks) VALUES (?, ?, ?, ?)"
+      );
+      const optionStmt = db.prepare(
+        "INSERT INTO order_detail_options (order_detail_id, option_id) VALUES (?, ?)"
+      );
 
-            // 監査ログに記録
-            db.run(
-              "INSERT INTO audit_logs (user_id, action, target_entity, target_id, details) VALUES (?, ?, ?, ?, ?)",
-              [
-                orderData.user_id,
-                "ORDER_CREATE",
-                "orders",
-                orderId,
-                JSON.stringify({
-                  order_date: orderData.order_date,
-                  items_count: orderData.items.length,
-                }),
-              ]
-            );
-
-            // 注文詳細を挿入
-            for (const item of orderData.items) {
-              db.run(
-                "INSERT INTO order_details (order_id, item_id, quantity, remarks) VALUES (?, ?, ?, ?)",
-                [orderId, item.item_id, item.quantity, item.remarks],
-                function (err) {
-                  if (err) {
-                    db.run("ROLLBACK");
-                    reject(err);
-                    return;
-                  }
-
-                  const orderDetailId = this.lastID;
-
-                  // オプションがある場合は挿入
-                  if (item.option_ids && item.option_ids.length > 0) {
-                    let optionCompleted = 0;
-                    for (const optionId of item.option_ids) {
-                      db.run(
-                        "INSERT INTO order_detail_options (order_detail_id, option_id) VALUES (?, ?)",
-                        [orderDetailId, optionId],
-                        (err) => {
-                          if (err) {
-                            db.run("ROLLBACK");
-                            reject(err);
-                            return;
-                          }
-                          optionCompleted++;
-                          if (optionCompleted === item.option_ids!.length) {
-                            completed++;
-                            if (completed === orderData.items.length) {
-                              db.run("COMMIT");
-                              resolve();
-                            }
-                          }
-                        }
-                      );
-                    }
-                  } else {
-                    completed++;
-                    if (completed === orderData.items.length) {
-                      db.run("COMMIT");
-                      resolve();
-                    }
-                  }
-                }
-              );
-            }
-          }
+      for (const item of orderData.items) {
+        const orderDetailResult = orderDetailStmt.run(
+          orderId,
+          item.item_id,
+          item.quantity,
+          item.remarks
         );
-      });
+        const orderDetailId = orderDetailResult.lastInsertRowid as number;
+
+        // オプションがある場合は挿入
+        if (item.option_ids && item.option_ids.length > 0) {
+          for (const optionId of item.option_ids) {
+            optionStmt.run(orderDetailId, optionId);
+          }
+        }
+      }
     });
+
+    transaction();
   }
 
-  async deleteOrder(orderId: number): Promise<void> {
+  deleteOrder(orderId: number): void {
     const db = this.db;
 
-    return new Promise((resolve, reject) => {
-      db.serialize(() => {
-        db.run("BEGIN TRANSACTION");
+    const transaction = db.transaction(() => {
+      // 関連するオプションデータを削除
+      const deleteOptionsStmt = db.prepare(
+        "DELETE FROM order_detail_options WHERE order_detail_id IN (SELECT id FROM order_details WHERE order_id = ?)"
+      );
+      deleteOptionsStmt.run(orderId);
 
-        // 関連するオプションデータを削除
-        db.run(
-          "DELETE FROM order_detail_options WHERE order_detail_id IN (SELECT id FROM order_details WHERE order_id = ?)",
-          [orderId],
-          (err) => {
-            if (err) {
-              db.run("ROLLBACK");
-              reject(err);
-              return;
-            }
+      // 注文詳細を削除
+      const deleteDetailsStmt = db.prepare(
+        "DELETE FROM order_details WHERE order_id = ?"
+      );
+      deleteDetailsStmt.run(orderId);
 
-            // 注文詳細を削除
-            db.run(
-              "DELETE FROM order_details WHERE order_id = ?",
-              [orderId],
-              (err) => {
-                if (err) {
-                  db.run("ROLLBACK");
-                  reject(err);
-                  return;
-                }
-
-                // 注文を削除
-                db.run("DELETE FROM orders WHERE id = ?", [orderId], (err) => {
-                  if (err) {
-                    db.run("ROLLBACK");
-                    reject(err);
-                  } else {
-                    db.run("COMMIT");
-                    resolve();
-                  }
-                });
-              }
-            );
-          }
-        );
-      });
+      // 注文を削除
+      const deleteOrderStmt = db.prepare("DELETE FROM orders WHERE id = ?");
+      deleteOrderStmt.run(orderId);
     });
+
+    transaction();
   }
 
   // 週次レポート
-  async getWeeklyReport(startDate: string): Promise<WeeklyReport> {
+  getWeeklyReport(startDate: string): WeeklyReport {
     // 週の終了日を計算
     const start = new Date(startDate);
     const end = new Date(start);
@@ -742,7 +679,7 @@ export class DatabaseManager {
       ORDER BY i.display_order, i.name, o.order_date
     `;
 
-    const rows = await this.all(sql, [startDate, endDate]);
+    const rows = this.all(sql, [startDate, endDate]);
 
     const report: WeeklyReport = {
       week_start: startDate,
@@ -826,7 +763,7 @@ export class DatabaseManager {
   }
 
   // 月次レポート（設計書Ver.5.0準拠）
-  async getMonthlyReport(month: string): Promise<MonthlyReport> {
+  getMonthlyReport(month: string): MonthlyReport {
     const sql = `
       SELECT 
         u.name as staff_name,
@@ -840,10 +777,10 @@ export class DatabaseManager {
       ORDER BY u.display_order, u.name
     `;
 
-    const rows = await this.all(sql, [month]);
+    const rows = this.all(sql, [month]);
 
     // 月次締め状況を確認
-    const lockStatus = await this.get(
+    const lockStatus = this.get(
       `SELECT status, locked_at, locked_by_user_id, u.name as locked_by_name 
        FROM orders o
        LEFT JOIN users u ON o.locked_by_user_id = u.id
@@ -865,15 +802,13 @@ export class DatabaseManager {
   }
 
   // 月次締め処理（設計書Ver.5.0準拠）
-  async lockMonth(year: number, month: number, userId: number): Promise<void> {
+  lockMonth(year: number, month: number, userId: number): void {
     const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
     const lockTimestamp = new Date().toISOString();
 
-    await this.run("BEGIN TRANSACTION");
-
-    try {
+    const transaction = this.db.transaction(() => {
       // 対象月の全注文をロック
-      await this.run(
+      this.run(
         `UPDATE orders 
          SET status = 'locked', locked_at = ?, locked_by_user_id = ? 
          WHERE strftime('%Y-%m', order_date) = ? AND status = 'open'`,
@@ -881,24 +816,21 @@ export class DatabaseManager {
       );
 
       // 監査ログに記録
-      await this.addAuditLog(userId, "MONTH_LOCK", "orders", null, {
+      this.addAuditLog(userId, "MONTH_LOCK", "orders", null, {
         month: monthStr,
         locked_at: lockTimestamp,
       });
+    });
 
-      await this.run("COMMIT");
-    } catch (error) {
-      await this.run("ROLLBACK");
-      throw error;
-    }
+    transaction();
   }
 
   // ユーザー固有の注文取得（セルフサービス対応）
-  async getOrdersByUser(
+  getOrdersByUser(
     userId: number,
     dateFrom?: string,
     dateTo?: string
-  ): Promise<OrderView[]> {
+  ): OrderView[] {
     let whereClause = "WHERE o.user_id = ?";
     const params: any[] = [userId];
 
@@ -935,7 +867,7 @@ export class DatabaseManager {
       ORDER BY o.order_date DESC, i.display_order, i.name
     `;
 
-    const rows = await this.all(sql, params);
+    const rows = this.all(sql, params);
     return rows.map((row) => ({
       ...row,
       options: row.options ? row.options.split(",") : [],
@@ -943,9 +875,9 @@ export class DatabaseManager {
   }
 
   // 注文キャンセル（ロック済みは不可）
-  async cancelOrder(orderId: number, userId: number): Promise<void> {
+  cancelOrder(orderId: number, userId: number): void {
     // 注文の存在確認とロック状態チェック
-    const order = await this.get(
+    const order = this.get(
       "SELECT * FROM orders WHERE id = ? AND user_id = ?",
       [orderId, userId]
     );
@@ -958,11 +890,9 @@ export class DatabaseManager {
       throw new Error("ORDER_LOCKED");
     }
 
-    await this.run("BEGIN TRANSACTION");
-
-    try {
+    const transaction = this.db.transaction(() => {
       // 注文詳細オプションを削除
-      await this.run(
+      this.run(
         `DELETE FROM order_detail_options 
          WHERE order_detail_id IN (
            SELECT id FROM order_details WHERE order_id = ?
@@ -971,25 +901,22 @@ export class DatabaseManager {
       );
 
       // 注文詳細を削除
-      await this.run("DELETE FROM order_details WHERE order_id = ?", [orderId]);
+      this.run("DELETE FROM order_details WHERE order_id = ?", [orderId]);
 
       // 注文を削除
-      await this.run("DELETE FROM orders WHERE id = ?", [orderId]);
+      this.run("DELETE FROM orders WHERE id = ?", [orderId]);
 
       // 監査ログに記録
-      await this.addAuditLog(userId, "ORDER_CANCEL", "orders", orderId, {
+      this.addAuditLog(userId, "ORDER_CANCEL", "orders", orderId, {
         order_date: order.order_date,
       });
+    });
 
-      await this.run("COMMIT");
-    } catch (error) {
-      await this.run("ROLLBACK");
-      throw error;
-    }
+    transaction();
   }
 
   // 週間注文保存（洗い替え方式）
-  async saveWeeklyOrders(payload: WeeklySavePayload): Promise<void> {
+  saveWeeklyOrders(payload: WeeklySavePayload): void {
     const { orders, staffIdsOnScreen, weekStart, weekEnd } = payload;
 
     // 画面にスタッフが一人も表示されていない場合は何もしない
@@ -999,10 +926,9 @@ export class DatabaseManager {
     }
 
     // トランザクション開始
-    await this.run("BEGIN TRANSACTION");
-    try {
+    const transaction = this.db.transaction(() => {
       // ステップ1：これから操作する範囲の、既存の注文IDをすべて取得
-      const targetOrderIdsResult = await this.all(
+      const targetOrderIdsResult = this.all(
         // IN句を安全に組み立てる
         `SELECT id FROM orders WHERE user_id IN (${staffIdsOnScreen
           .map(() => "?")
@@ -1015,14 +941,14 @@ export class DatabaseManager {
 
         // ステップ2：既存の注文を、関連テーブルから順番に「すべて削除」する
         // まずは子テーブル (order_details) から削除
-        await this.run(
+        this.run(
           `DELETE FROM order_details WHERE order_id IN (${idsToDelete
             .map(() => "?")
             .join(",")})`,
           idsToDelete
         );
         // 次に親テーブル (orders) を削除
-        await this.run(
+        this.run(
           `DELETE FROM orders WHERE id IN (${idsToDelete
             .map(() => "?")
             .join(",")})`,
@@ -1059,37 +985,34 @@ export class DatabaseManager {
       for (const key in ordersToCreate) {
         const order = ordersToCreate[key];
 
-        const result = await this.run(
+        const result = this.run(
           "INSERT INTO orders (order_date, user_id) VALUES (?, ?)",
           [order.order_date, order.staff_id]
         );
-        const newOrderId = result.lastID!;
+        const newOrderId = result.lastInsertRowid as number;
 
         for (const detail of order.details) {
-          await this.run(
+          this.run(
             "INSERT INTO order_details (order_id, item_id, quantity) VALUES (?, ?, ?)",
             [newOrderId, detail.item_id, detail.quantity]
           );
         }
       }
+    });
 
-      // ステップ4：すべての処理が成功したら、変更を確定
-      await this.run("COMMIT");
+    // トランザクション実行
+    try {
+      transaction();
       console.log("週間注文を正常に保存しました。");
     } catch (error) {
-      // ステップ5：途中でエラーが起きたら、すべての変更を無かったことにする
-      await this.run("ROLLBACK");
-      console.error(
-        "週間注文の保存に失敗しました。ロールバックを実行します:",
-        error
-      );
+      console.error("週間注文の保存に失敗しました:", error);
       throw error;
     }
   }
 
   // 設定関連
-  async getSettings(): Promise<Settings> {
-    const rows = await this.all("SELECT key, value FROM settings");
+  getSettings(): Settings {
+    const rows = this.all("SELECT key, value FROM settings");
     const settings: Settings = {};
 
     for (const row of rows) {
@@ -1099,47 +1022,26 @@ export class DatabaseManager {
     return settings;
   }
 
-  async saveSettings(settings: Settings): Promise<void> {
+  saveSettings(settings: Settings): void {
     const db = this.db;
 
-    return new Promise((resolve, reject) => {
-      db.serialize(() => {
-        db.run("BEGIN TRANSACTION");
+    const transaction = db.transaction(() => {
+      const settingStmt = db.prepare(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
+      );
 
-        const keys = Object.keys(settings);
-        let completed = 0;
-
-        for (const key of keys) {
-          const value = settings[key];
-          db.run(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            [key, value],
-            (err) => {
-              if (err) {
-                db.run("ROLLBACK");
-                reject(err);
-                return;
-              }
-              completed++;
-              if (completed === keys.length) {
-                db.run("COMMIT");
-                resolve();
-              }
-            }
-          );
-        }
-
-        if (keys.length === 0) {
-          db.run("COMMIT");
-          resolve();
-        }
-      });
+      for (const key of Object.keys(settings)) {
+        const value = settings[key];
+        settingStmt.run(key, value);
+      }
     });
+
+    transaction();
   }
 
   // 認証・ユーザー関連（設計書Ver.5.0準拠）
   async login(email: string, password: string): Promise<User> {
-    const user = await this.get(
+    const user = this.get(
       "SELECT u.*, r.name as role_name FROM users u JOIN roles r ON u.role_id = r.id WHERE u.email = ? AND u.is_active = 1",
       [email]
     );
@@ -1157,7 +1059,7 @@ export class DatabaseManager {
     const { password_hash, ...userWithoutPassword } = user;
 
     // 監査ログに記録
-    await this.addAuditLog(user.id, "USER_LOGIN", "users", user.id, {
+    this.addAuditLog(user.id, "USER_LOGIN", "users", user.id, {
       email: email,
       timestamp: new Date().toISOString(),
     });
@@ -1165,8 +1067,8 @@ export class DatabaseManager {
     return userWithoutPassword;
   }
 
-  async getCurrentUser(userId: number): Promise<User> {
-    const user = await this.get(
+  getCurrentUser(userId: number): User {
+    const user = this.get(
       "SELECT u.*, r.name as role_name FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = ? AND u.is_active = 1",
       [userId]
     );
@@ -1179,8 +1081,8 @@ export class DatabaseManager {
     return userWithoutPassword;
   }
 
-  async getUsers(): Promise<User[]> {
-    const users = await this.all(
+  getUsers(): User[] {
+    const users = this.all(
       "SELECT u.*, r.name as role_name FROM users u JOIN roles r ON u.role_id = r.id WHERE u.is_active = 1 ORDER BY u.display_order, u.name"
     );
 
@@ -1197,13 +1099,13 @@ export class DatabaseManager {
   ): Promise<void> {
     const passwordHash = await bcrypt.hash(password, 10);
 
-    await this.run(
+    this.run(
       "INSERT INTO users (name, email, password_hash, role_id, display_order) VALUES (?, ?, ?, ?, ?)",
       [name, email, passwordHash, roleId, displayOrder]
     );
 
     // 監査ログに記録
-    await this.addAuditLog(null, "USER_CREATE", "users", null, {
+    this.addAuditLog(null, "USER_CREATE", "users", null, {
       name: name,
       email: email,
       role_id: roleId,
@@ -1218,15 +1120,15 @@ export class DatabaseManager {
     isActive: number,
     displayOrder?: number
   ): Promise<void> {
-    const oldUser = await this.get("SELECT * FROM users WHERE id = ?", [id]);
+    const oldUser = this.get("SELECT * FROM users WHERE id = ?", [id]);
 
-    await this.run(
+    this.run(
       "UPDATE users SET name = ?, email = ?, role_id = ?, is_active = ?, display_order = ? WHERE id = ?",
       [name, email, roleId, isActive, displayOrder, id]
     );
 
     // 監査ログに記録
-    await this.addAuditLog(null, "USER_UPDATE", "users", id, {
+    this.addAuditLog(null, "USER_UPDATE", "users", id, {
       old: oldUser,
       new: {
         name,
@@ -1238,37 +1140,37 @@ export class DatabaseManager {
     });
   }
 
-  async deleteUser(id: number): Promise<void> {
-    const user = await this.get("SELECT * FROM users WHERE id = ?", [id]);
+  deleteUser(id: number): void {
+    const user = this.get("SELECT * FROM users WHERE id = ?", [id]);
 
     if (!user) {
       throw new Error(`User with id ${id} not found`);
     }
 
     // 物理削除ではなく論理削除（is_activeを0に設定）
-    await this.run("UPDATE users SET is_active = 0 WHERE id = ?", [id]);
+    this.run("UPDATE users SET is_active = 0 WHERE id = ?", [id]);
 
     // 監査ログに記録
-    await this.addAuditLog(null, "USER_DEACTIVATE", "users", id, {
+    this.addAuditLog(null, "USER_DEACTIVATE", "users", id, {
       deactivated_user: user,
     });
   }
 
   // 監査ログ関連
-  async addAuditLog(
+  addAuditLog(
     userId: number | null,
     action: string,
     targetEntity: string,
     targetId: number | null,
     details: any
-  ): Promise<void> {
-    await this.run(
+  ): void {
+    this.run(
       "INSERT INTO audit_logs (user_id, action, target_entity, target_id, details) VALUES (?, ?, ?, ?, ?)",
       [userId, action, targetEntity, targetId, JSON.stringify(details)]
     );
   }
 
-  async getAuditLogs(
+  getAuditLogs(
     filters: {
       userId?: number;
       action?: string;
@@ -1278,7 +1180,7 @@ export class DatabaseManager {
       limit?: number;
       offset?: number;
     } = {}
-  ): Promise<{ logs: AuditLog[]; total: number }> {
+  ): { logs: AuditLog[]; total: number } {
     let whereClause = "WHERE 1=1";
     const params: any[] = [];
 
@@ -1308,7 +1210,7 @@ export class DatabaseManager {
     }
 
     // 合計件数を取得
-    const totalResult = await this.get(
+    const totalResult = this.get(
       `SELECT COUNT(*) as count FROM audit_logs ${whereClause}`,
       params
     );
@@ -1322,7 +1224,7 @@ export class DatabaseManager {
       }
     }
 
-    const logs = await this.all(
+    const logs = this.all(
       `SELECT al.*, u.name as user_name 
        FROM audit_logs al 
        LEFT JOIN users u ON al.user_id = u.id 
@@ -1338,36 +1240,30 @@ export class DatabaseManager {
   }
 
   // データベースを閉じる
-  async close(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // 既にDBハンドルがない（＝閉じているか、閉じる処理中）場合は、何もせず正常終了
-      if (!this.db) {
-        console.log("データベースは既に閉じられています");
-        return resolve();
-      }
+  close(): void {
+    // 既にDBハンドルがない（＝閉じているか、閉じる処理中）場合は、何もせず正常終了
+    if (!this.db) {
+      console.log("データベースは既に閉じられています");
+      return;
+    }
 
-      // ★重要：先にインスタンス変数を null 化することで、後続の close 呼び出しを即座に終了させる
-      const dbToClose = this.db;
-      this.db = null!; // null! は「ここにはnullが入らない」というTypeScriptへの意思表示
-      DatabaseManager.instance = null;
-      DatabaseManager.initPromise = null;
+    // ★重要：先にインスタンス変数を null 化することで、後続の close 呼び出しを即座に終了させる
+    const dbToClose = this.db;
+    this.db = null!; // null! は「ここにはnullが入らない」というTypeScriptへの意思表示
+    DatabaseManager.instance = null;
 
-      console.log("データベースの切断処理を開始します...");
-      dbToClose.close((err) => {
-        if (err) {
-          console.error("データベース切断エラー:", err);
-          // エラーが発生しても、アプリケーションは終了処理を続けるべきなので reject せずに resolve する
-          resolve(); // エラーはログに出すが、処理は止めない
-        } else {
-          console.log("データベースを正常に切断しました");
-          resolve();
-        }
-      });
-    });
+    console.log("データベースの切断処理を開始します...");
+    try {
+      dbToClose.close();
+      console.log("データベースを正常に切断しました");
+    } catch (err) {
+      console.error("データベース切断エラー:", err);
+      // エラーが発生しても、アプリケーションは終了処理を続ける
+    }
   }
 
   // データベースを完全にリセットする（開発用）
-  private async dropAllTables(): Promise<void> {
+  private dropAllTables(): void {
     const dropTables = [
       "DROP TABLE IF EXISTS audit_logs",
       "DROP TABLE IF EXISTS order_detail_options",
@@ -1382,15 +1278,15 @@ export class DatabaseManager {
     ];
 
     for (const sql of dropTables) {
-      await this.run(sql);
+      this.db.exec(sql);
     }
   }
 
   // 強制的にデータベースを再初期化
-  public async forceReinitialize(): Promise<void> {
+  public forceReinitialize(): void {
     try {
-      await this.dropAllTables();
-      await this.initializeDatabase();
+      this.dropAllTables();
+      this.initializeDatabase();
       console.log("データベースを再初期化しました");
     } catch (error) {
       console.error("データベース再初期化エラー:", error);
@@ -1400,14 +1296,13 @@ export class DatabaseManager {
   // テスト用: シングルトンインスタンスをリセット
   public static resetInstance(): void {
     if (DatabaseManager.instance) {
-      DatabaseManager.instance.db?.close(() => {});
+      DatabaseManager.instance.db?.close();
     }
     DatabaseManager.instance = null;
-    DatabaseManager.initPromise = null;
   }
 
   // 週間の注文データを取得（WeeklyOrderPage用）
-  async getOrdersForWeek(startDate: string): Promise<WeeklyOrderData[]> {
+  getOrdersForWeek(startDate: string): WeeklyOrderData[] {
     const start = new Date(startDate);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);

@@ -9,32 +9,26 @@ describe("スタッフ削除統合テスト", () => {
   let db: DatabaseManager;
   const testDbPath = ":memory:";
 
-  beforeAll(async () => {
-    db = await DatabaseManager.getInstance(testDbPath);
+  beforeAll(() => {
+    db = DatabaseManager.getInstance(testDbPath);
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     if (db) {
-      await db.close();
+      db.close();
     }
   });
 
-  it("スタッフ削除の全体フローが正常に動作する", async () => {
+  it("スタッフ削除の全体フローが正常に動作する", () => {
     console.info("=== スタッフ削除統合テスト開始 ===");
 
     // 1. テストスタッフを追加
     console.info("ステップ1: テストスタッフを追加");
-    await db.addUser(
-      "削除テストスタッフ",
-      "delete@test.com",
-      "password123",
-      2,
-      1
-    );
+    db.addUser("削除テストスタッフ", "delete@test.com", "password123", 2, 1);
 
     // 2. 初期状態の確認
     console.info("ステップ2: 初期状態の確認");
-    const initialUsers = await db.getUsers();
+    const initialUsers = db.getUsers();
     const targetStaff = initialUsers.find(
       (u) => u.name === "削除テストスタッフ"
     );
@@ -52,7 +46,7 @@ describe("スタッフ削除統合テスト", () => {
     console.info(
       "ステップ3: AppContext.refreshStaffロジックをシミュレート（削除前）"
     );
-    const usersBeforeDelete = await db.getUsers();
+    const usersBeforeDelete = db.getUsers();
     const staffListBeforeDelete = usersBeforeDelete
       .filter((user) => user.is_active)
       .map((user) => ({
@@ -75,14 +69,14 @@ describe("スタッフ削除統合テスト", () => {
     );
 
     // window.api.deleteUser(staff.id) の部分をシミュレート
-    await db.deleteUser(targetStaff!.id);
+    db.deleteUser(targetStaff!.id);
     console.info("✅ deleteUser呼び出し完了");
 
     // 5. AppContextのrefreshStaffロジックをシミュレート（削除後）
     console.info(
       "ステップ5: AppContext.refreshStaffロジックをシミュレート（削除後）"
     );
-    const usersAfterDelete = await db.getUsers();
+    const usersAfterDelete = db.getUsers();
     const staffListAfterDelete = usersAfterDelete
       .filter((user) => user.is_active)
       .map((user) => ({
@@ -103,10 +97,9 @@ describe("スタッフ削除統合テスト", () => {
 
     // 7. データベースレベルでの確認（論理削除されているが物理的には存在）
     console.info("ステップ6: データベースレベルでの確認");
-    const allUsersInDb = await db.debugQuery(
-      "SELECT * FROM users WHERE name = ?",
-      ["削除テストスタッフ"]
-    );
+    const allUsersInDb = db.debugQuery("SELECT * FROM users WHERE name = ?", [
+      "削除テストスタッフ",
+    ]);
     expect(allUsersInDb.length).toBe(1);
     expect(allUsersInDb[0].is_active).toBe(0);
 
