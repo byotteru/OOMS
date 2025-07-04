@@ -213,6 +213,14 @@ jest-coverage/
 debug_*.js
 test-*.js
 *_debug.js
+*_debug.test.ts
+*-debug.test.ts
+*-simplified.test.ts
+migration-verification.test.ts
+
+# Test database files
+test_*.db
+migration_test.db
 
 # ========================================
 # Temporary and cache files
@@ -280,6 +288,8 @@ builder-effective-config.yaml
 *_debug_report.md
 database_logic_investigation_report.md
 final-report.js
+PROJECT_COMPLETION_REPORT.md
+SCREEN_TRANSITION_GUIDE.md
 
 # Backup files
 *.backup
