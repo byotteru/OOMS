@@ -1,6 +1,6 @@
 {
   "name": "ooms-app",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "お弁当注文管理システム (OOMS: O-bento Order Management System)",
   "main": "out/main/index.js",
   "repository": {

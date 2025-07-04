@@ -117,4 +117,5 @@ export interface WeeklyOrderData {
   order_date: string; // YYYY-MM-DD format
   item_id: number;
   quantity: number;
+  status?: string; // 'open', 'locked'
 }

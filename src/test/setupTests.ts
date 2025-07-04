@@ -108,6 +108,10 @@ global.window.api = {
   deleteOrder: vi.fn().mockResolvedValue(undefined),
   saveWeeklyOrders: vi.fn().mockResolvedValue(undefined),
 
+  // 注文ロック関連
+  lockOrders: vi.fn().mockResolvedValue({ success: true }),
+  unlockOrders: vi.fn().mockResolvedValue({ success: true }),
+
   // レポート関連
   getWeeklyReport: vi.fn().mockResolvedValue({
     week_start: "2025-07-01",

@@ -37,7 +37,12 @@ declare global {
         isActive: number,
         displayOrder?: number
       ): Promise<void>;
-      deleteUser(id: number): Promise<void>;
+      deleteUser(id: number): Promise<{
+        success: boolean;
+        warning?: boolean;
+        message?: string;
+        orderCount?: number;
+      }>;
 
       // スタッフ関連（後方互換性）
       getStaff(): Promise<Staff[]>;
@@ -104,6 +109,17 @@ declare global {
       // 設定関連
       getSettings(): Promise<Settings>;
       saveSettings(settings: Settings): Promise<void>;
+
+      // 注文ロック関連
+      lockOrders(
+        weekStart: string,
+        weekEnd: string
+      ): Promise<{ success: boolean; error?: string }>;
+      unlockOrders(
+        password: string,
+        weekStart: string,
+        weekEnd: string
+      ): Promise<{ success: boolean; error?: string }>;
 
       // ユーティリティ
       showErrorDialog(title: string, message: string): Promise<void>;

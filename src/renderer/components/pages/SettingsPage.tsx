@@ -27,9 +27,29 @@ const SettingsPage: React.FC = () => {
   const handleSaveSettings = async () => {
     if (!formData) return;
 
+    console.log("保存データ:", formData);
+
+    // 管理者パスワードの確認
+    if (!formData.admin_password) {
+      console.log("警告: 管理者パスワードが未設定です");
+      const confirmNoPassword = window.confirm(
+        "管理者パスワードが設定されていません。\n" +
+          "管理者パスワードを設定しないと、注文のロック解除ができなくなります。\n" +
+          "続行しますか？"
+      );
+
+      if (!confirmNoPassword) {
+        return;
+      }
+    }
+
     setIsSaving(true);
     try {
       await window.api.saveSettings(formData);
+      console.log("設定保存成功:", {
+        ...formData,
+        admin_password: formData.admin_password ? "********" : "(未設定)",
+      });
       await showApiSuccess("設定を保存しました");
       await refreshSettings(); // 設計書通りの状態同期パターン
     } catch (error) {
@@ -238,6 +258,33 @@ const SettingsPage: React.FC = () => {
                   handleInputChange("supplier_website", e.target.value)
                 }
               />
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <h3>🔒 システム設定</h3>
+            <p className="section-description">システムの管理設定を行います</p>
+            <div className="form-group">
+              <label htmlFor="admin-password" className="form-label">
+                <span style={{ color: "red", fontWeight: "bold" }}>
+                  管理者用パスワード *
+                </span>
+              </label>
+              <input
+                type="password"
+                id="admin-password"
+                className="form-control"
+                placeholder="注文ロック解除に使用するパスワード"
+                value={formData.admin_password || ""}
+                onChange={(e) =>
+                  handleInputChange("admin_password", e.target.value)
+                }
+              />
+              <small className="form-text text-muted">
+                <strong>重要:</strong>{" "}
+                このパスワードは週間注文をロックした後に解除する際に必要です。
+                必ず設定してください。
+              </small>
             </div>
           </div>
 

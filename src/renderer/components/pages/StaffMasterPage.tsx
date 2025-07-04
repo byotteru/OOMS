@@ -109,9 +109,17 @@ const StaffMasterPage: React.FC = () => {
       console.log("🔄 deleteUser API呼び出し開始...", staff.id);
 
       // staff.id を使って、新しい deleteUser API を呼び出す
-      await window.api.deleteUser(staff.id);
+      const result = await window.api.deleteUser(staff.id);
 
-      console.log("✅ deleteUser API呼び出し成功");
+      console.log("✅ deleteUser API呼び出し成功", result);
+
+      // 注文データがある場合は警告を表示
+      if (result.warning) {
+        await window.api.showInfoDialog(
+          "注意",
+          result.message || "このスタッフには関連する注文データがあります。"
+        );
+      }
 
       await showApiSuccess("スタッフを無効化しました");
 
@@ -138,8 +146,16 @@ const StaffMasterPage: React.FC = () => {
       // ユーザーテーブルの更新に切り替え - deleteUserで論理削除を行う
       if (newStatus === 0) {
         console.log("🔄 deleteUser API呼び出し開始...", staff.id);
-        await window.api.deleteUser(staff.id);
-        console.log("✅ deleteUser API呼び出し成功");
+        const result = await window.api.deleteUser(staff.id);
+        console.log("✅ deleteUser API呼び出し成功", result);
+
+        // 注文データがある場合は警告を表示
+        if (result.warning) {
+          await window.api.showInfoDialog(
+            "注意",
+            result.message || "このスタッフには関連する注文データがあります。"
+          );
+        }
       } else {
         // 有効化の場合はupdateStaffを使用（ユーザーの有効化はupdateUserで行うべきだが
         // 既存コードとの互換性のため残す）

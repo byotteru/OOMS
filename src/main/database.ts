@@ -338,19 +338,6 @@ export class DatabaseManager {
       this.db.prepare("INSERT INTO roles (id, name) VALUES (2, 'User')").run();
     }
 
-    // デフォルト管理者アカウントの作成
-    const userCount = this.db
-      .prepare("SELECT COUNT(*) as count FROM users")
-      .get() as { count: number };
-    if (userCount.count === 0) {
-      const passwordHash = bcrypt.hashSync("admin123", 10); // 同期版を使用
-      this.db
-        .prepare(
-          "INSERT INTO users (name, email, password_hash, role_id, display_order) VALUES (?, ?, ?, 1, 1)"
-        )
-        .run(["管理者", "admin@example.com", passwordHash]);
-    }
-
     // スタッフデータの移行（staffテーブル → usersテーブル）
     this.migrateStaffToUsers();
 
@@ -1147,13 +1134,37 @@ export class DatabaseManager {
       throw new Error(`User with id ${id} not found`);
     }
 
-    // 物理削除ではなく論理削除（is_activeを0に設定）
-    this.run("UPDATE users SET is_active = 0 WHERE id = ?", [id]);
+    // ユーザーの注文データを確認
+    const orderCheck = this.checkUserHasOrders(id);
 
-    // 監査ログに記録
-    this.addAuditLog(null, "USER_DEACTIVATE", "users", id, {
-      deactivated_user: user,
+    // トランザクション開始
+    const transaction = this.db.transaction(() => {
+      // 物理削除ではなく論理削除（is_activeを0に設定）
+      this.run("UPDATE users SET is_active = 0 WHERE id = ?", [id]);
+
+      // 注文データが存在する場合、ユーザー名に（削除済み）を追加
+      if (orderCheck.hasOrders) {
+        this.run("UPDATE users SET name = ? WHERE id = ?", [
+          `${user.name}（削除済み）`,
+          id,
+        ]);
+      }
+
+      // 監査ログに記録
+      this.addAuditLog(null, "USER_DEACTIVATE", "users", id, {
+        deactivated_user: user,
+        had_orders: orderCheck.hasOrders,
+        order_count: orderCheck.count,
+      });
     });
+
+    // トランザクション実行
+    transaction();
+
+    // 注文データがある場合は例外をスローして通知
+    if (orderCheck.hasOrders) {
+      throw new Error(`USER_HAS_ORDERS:${orderCheck.count}`);
+    }
   }
 
   // 監査ログ関連
@@ -1239,6 +1250,19 @@ export class DatabaseManager {
     };
   }
 
+  // ユーザーが注文データを持っているかチェック
+  checkUserHasOrders(userId: number): { hasOrders: boolean; count: number } {
+    const result = this.get(
+      "SELECT COUNT(*) as count FROM orders WHERE user_id = ?",
+      [userId]
+    ) as { count: number };
+
+    return {
+      hasOrders: result.count > 0,
+      count: result.count,
+    };
+  }
+
   // データベースを閉じる
   close(): void {
     // 既にDBハンドルがない（＝閉じているか、閉じる処理中）場合は、何もせず正常終了
@@ -1313,12 +1337,43 @@ export class DatabaseManager {
         o.user_id as staff_id,
         o.order_date,
         od.item_id,
-        od.quantity
+        od.quantity,
+        o.status
       FROM orders o
       JOIN order_details od ON o.id = od.order_id
       WHERE o.order_date BETWEEN ? AND ?
     `;
 
     return this.all(sql, [startDate, endDate]);
+  } // 指定された週の注文をロックする
+  lockOrdersForWeek(weekStart: string, weekEnd: string): void {
+    console.log(
+      `データベース: 週の注文をロック中 (${weekStart} から ${weekEnd})`
+    );
+    const sql = `
+      UPDATE orders
+      SET status = 'locked', locked_at = datetime('now')
+      WHERE order_date BETWEEN ? AND ? AND status = 'open'
+    `;
+
+    const result = this.run(sql, [weekStart, weekEnd]);
+    console.log(`ロック結果: ${result.changes}件の注文をロックしました`);
+  }
+
+  // 指定された週の注文のロックを解除する
+  unlockOrdersForWeek(weekStart: string, weekEnd: string): void {
+    console.log(
+      `データベース: 週の注文のロックを解除中 (${weekStart} から ${weekEnd})`
+    );
+    const sql = `
+      UPDATE orders
+      SET status = 'open', locked_at = NULL
+      WHERE order_date BETWEEN ? AND ? AND status = 'locked'
+    `;
+
+    const result = this.run(sql, [weekStart, weekEnd]);
+    console.log(
+      `ロック解除結果: ${result.changes}件の注文のロックを解除しました`
+    );
   }
 }

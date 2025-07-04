@@ -42,8 +42,14 @@ const api = {
       isActive,
       displayOrder
     ),
-  deleteUser: (id: number): Promise<void> =>
-    ipcRenderer.invoke("delete-user", id),
+  deleteUser: (
+    id: number
+  ): Promise<{
+    success: boolean;
+    warning?: boolean;
+    message?: string;
+    orderCount?: number;
+  }> => ipcRenderer.invoke("delete-user", id),
 
   // スタッフ関連（後方互換性）
   getStaff: (): Promise<Staff[]> => ipcRenderer.invoke("get-staff"),
@@ -127,6 +133,19 @@ const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke("get-settings"),
   saveSettings: (settings: Settings): Promise<void> =>
     ipcRenderer.invoke("save-settings", settings),
+
+  // 注文ロック関連
+  lockOrders: (
+    weekStart: string,
+    weekEnd: string
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("lock-orders", weekStart, weekEnd),
+  unlockOrders: (
+    password: string,
+    weekStart: string,
+    weekEnd: string
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("unlock-orders", password, weekStart, weekEnd),
 
   // ユーティリティ
   showErrorDialog: (title: string, message: string): Promise<void> =>

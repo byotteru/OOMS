@@ -37,6 +37,12 @@ const WeeklyOrderPage: React.FC = () => {
   const [currentWeek, setCurrentWeek] = useState<string>(getCurrentWeek());
   const [staffOrders, setStaffOrders] = useState<StaffOrderState[]>([]);
   const [isPageLoading, setIsPageLoading] = useState(true);
+  const [isLocked, setIsLocked] = useState(false); // 注文がロックされているかどうか
+
+  // パスワード入力モーダル用のステート
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
 
   // 週の日付配列を生成
   const getWeekDays = (weekStart: string) => {
@@ -77,6 +83,19 @@ const WeeklyOrderPage: React.FC = () => {
         // 1. APIを呼び出して、その週の保存済み注文データを取得
         const savedOrders: WeeklyOrderData[] =
           await window.api.getOrdersForWeek(week);
+
+        // 注文ロック状態の確認
+        const hasLockedOrders = savedOrders.some(
+          (order) => order.status === "locked"
+        );
+        console.log("ロック状態チェック:", {
+          hasLockedOrders,
+          savedOrders: savedOrders.map((o) => ({
+            date: o.order_date,
+            status: o.status,
+          })),
+        });
+        setIsLocked(hasLockedOrders);
 
         // 2. フロントエンドで扱いやすい形式にデータを変換
         const savedOrdersMap: { [staff_id: number]: OrderMap } = {};
@@ -198,6 +217,119 @@ const WeeklyOrderPage: React.FC = () => {
     }
   };
 
+  // 注文ロック処理
+  const handleLockOrders = async () => {
+    const weekDays = getWeekDays(currentWeek);
+    const weekStart = weekDays[0]?.date;
+    const weekEnd = weekDays[6]?.date;
+
+    if (!weekStart || !weekEnd) {
+      alert("週の期間を特定できませんでした。");
+      return;
+    }
+
+    // 確認ダイアログを表示
+    const confirmLock = window.confirm(
+      "この週の注文を確定しますか？\n確定後は編集できなくなります。"
+    );
+
+    if (!confirmLock) return;
+
+    try {
+      // 一旦データを保存してから、ロック処理を行う
+      await saveWeeklyOrders();
+
+      const result = await window.api.lockOrders(weekStart, weekEnd);
+      console.log("lockOrders結果:", result);
+
+      if (result.success) {
+        alert(
+          "注文を確定しました。再度編集する場合は、管理者パスワードが必要です。"
+        );
+        // データを再読み込み
+        await fetchAndSetOrders(currentWeek);
+        setIsLocked(true); // 明示的にロック状態を設定
+      } else {
+        alert(`注文の確定に失敗しました: ${result.error || "不明なエラー"}`);
+      }
+    } catch (error) {
+      console.error("注文ロックエラー:", error);
+      alert("注文の確定に失敗しました。");
+    }
+  };
+
+  // 注文ロック解除処理 - パスワードモーダルを表示する
+  const handleUnlockOrders = () => {
+    // モーダルを表示してパスワード入力を促す
+    setUnlockPassword(""); // パスワード入力をリセット
+    setPasswordError(""); // エラーメッセージをリセット
+    setShowPasswordModal(true);
+  };
+
+  // パスワードによるロック解除の実行
+  const handlePasswordUnlock = async () => {
+    const weekDays = getWeekDays(currentWeek);
+    const weekStart = weekDays[0]?.date;
+    const weekEnd = weekDays[6]?.date;
+
+    if (!weekStart || !weekEnd) {
+      alert("週の期間を特定できませんでした。");
+      return;
+    }
+
+    if (unlockPassword.trim() === "") {
+      setPasswordError("パスワードを入力してください。");
+      return;
+    }
+
+    setPasswordError(""); // エラーメッセージをリセット
+    setIsPageLoading(true); // ローディング状態を開始
+
+    try {
+      const result = await window.api.unlockOrders(
+        unlockPassword,
+        weekStart,
+        weekEnd
+      );
+      console.log("unlockOrders結果:", result);
+
+      if (result.success) {
+        // モーダルを閉じる
+        setShowPasswordModal(false);
+        setUnlockPassword("");
+
+        // データを再読み込み
+        await fetchAndSetOrders(currentWeek);
+        setIsLocked(false); // 明示的にロック解除状態を設定
+
+        alert("注文ロックを解除しました。編集が可能になりました。");
+      } else {
+        setPasswordError(
+          `ロック解除に失敗しました: ${result.error || "不明なエラー"}`
+        );
+      }
+    } catch (error) {
+      console.error("注文ロック解除エラー:", error);
+      setPasswordError("ロック解除に失敗しました。");
+    } finally {
+      setIsPageLoading(false); // ローディング状態を終了
+    }
+  };
+
+  // パスワード入力欄でEnterキーを押した時の処理
+  const handlePasswordKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handlePasswordUnlock();
+    }
+  };
+
+  // パスワード入力モーダルを閉じる
+  const handleClosePasswordModal = () => {
+    setShowPasswordModal(false);
+    setUnlockPassword("");
+    setPasswordError("");
+  };
+
   // ローディング表示
   if (isLoading || isPageLoading) {
     return <LoadingIndicator message="注文データを読み込み中..." />;
@@ -287,6 +419,7 @@ const WeeklyOrderPage: React.FC = () => {
                               : null;
                             updateOrder(staffOrder.staff_id, day.date, itemId);
                           }}
+                          disabled={isLocked}
                         >
                           <option value="">なし</option>
                           {itemList
@@ -312,6 +445,7 @@ const WeeklyOrderPage: React.FC = () => {
                                 parseInt(e.target.value) || 1
                               );
                             }}
+                            disabled={isLocked}
                           />
                         )}
                       </td>
@@ -323,12 +457,55 @@ const WeeklyOrderPage: React.FC = () => {
           </table>
         </div>
 
-        <div className="form-actions mt-3">
-          <Button variant="primary" onClick={saveWeeklyOrders}>
+        <div className="form-actions mt-3 d-flex">
+          <Button
+            variant="primary"
+            onClick={saveWeeklyOrders}
+            disabled={isLocked}
+          >
             💾 週間注文を保存
           </Button>
+          <div style={{ marginLeft: "10px" }}>
+            {isLocked ? (
+              <Button variant="danger" onClick={handleUnlockOrders}>
+                🔓 編集のためロック解除
+              </Button>
+            ) : (
+              <Button variant="warning" onClick={handleLockOrders}>
+                🔒 この週の注文を確定する
+              </Button>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* パスワード入力モーダル */}
+      {showPasswordModal && (
+        <div className="password-modal">
+          <div className="modal-content">
+            <h4>管理者パスワード入力</h4>
+            <input
+              type="password"
+              className="form-control"
+              placeholder="パスワードを入力"
+              value={unlockPassword}
+              onChange={(e) => setUnlockPassword(e.target.value)}
+              onKeyPress={handlePasswordKeyPress}
+            />
+            {passwordError && (
+              <div className="alert alert-danger mt-2">{passwordError}</div>
+            )}
+            <div className="modal-actions mt-3">
+              <Button variant="primary" onClick={handlePasswordUnlock}>
+                {isPageLoading ? "処理中..." : "ロック解除"}
+              </Button>
+              <Button variant="secondary" onClick={handleClosePasswordModal}>
+                キャンセル
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

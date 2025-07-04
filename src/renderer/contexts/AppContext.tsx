@@ -57,6 +57,7 @@ export interface Settings {
   supplier_fax?: string;
   supplier_email?: string;
   supplier_website?: string;
+  admin_password?: string;
   // キャメルケースでもアクセス可能
   gardenName?: string;
   gardenAddress?: string;
@@ -70,6 +71,7 @@ export interface Settings {
   supplierFax?: string;
   supplierEmail?: string;
   supplierWebsite?: string;
+  adminPassword?: string;
   [key: string]: string | undefined;
 }
 

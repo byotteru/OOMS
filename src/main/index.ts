@@ -524,8 +524,24 @@ function setupIpcHandlers(): void {
     try {
       const db = ensureDbManager();
       db.deleteUser(id); // awaitを削除（同期メソッドになったため）
+      return { success: true };
     } catch (error) {
       console.error("ユーザー削除エラー:", error);
+
+      // USER_HAS_ORDERS エラーの特別処理
+      if (
+        error instanceof Error &&
+        error.message.startsWith("USER_HAS_ORDERS:")
+      ) {
+        const orderCount = error.message.split(":")[1];
+        return {
+          success: true,
+          warning: true,
+          message: `このスタッフには${orderCount}件の注文データが関連付けられています。スタッフは無効化されましたが、過去の注文データは保持されます。`,
+          orderCount: Number(orderCount),
+        };
+      }
+
       throw error;
     }
   });
@@ -599,6 +615,85 @@ function setupIpcHandlers(): void {
       throw error;
     }
   });
+
+  // 注文ロック関連
+  ipcMain.handle(
+    "lock-orders",
+    async (_, weekStart: string, weekEnd: string) => {
+      try {
+        const db = ensureDbManager();
+        db.lockOrdersForWeek(weekStart, weekEnd);
+        return { success: true };
+      } catch (error) {
+        console.error("注文ロックエラー:", error);
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "不明なエラーが発生しました",
+        };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "unlock-orders",
+    async (_, password: string, weekStart: string, weekEnd: string) => {
+      console.log(
+        `unlock-orders IPC: パスワード検証開始 (週: ${weekStart}～${weekEnd})`
+      );
+      try {
+        const db = ensureDbManager();
+        // 保存されている管理者パスワードを取得
+        const settings = db.getSettings();
+        const savedPassword = settings.admin_password;
+
+        console.log(
+          `設定から取得した管理者パスワード: ${
+            savedPassword ? "設定済み" : "未設定"
+          }`
+        );
+
+        // パスワードが設定されていない場合
+        if (!savedPassword) {
+          console.log("エラー: 管理者パスワードが設定されていません");
+          return {
+            success: false,
+            error:
+              "管理者パスワードが設定されていません。設定画面で設定してください。",
+          };
+        }
+
+        // パスワードが一致するか確認
+        console.log(
+          `パスワード検証: 入力=${password}, 保存=${savedPassword}, 一致=${
+            password === savedPassword
+          }`
+        );
+        if (password === savedPassword) {
+          console.log("パスワード一致: ロック解除を実行します");
+          db.unlockOrdersForWeek(weekStart, weekEnd);
+          return { success: true };
+        } else {
+          console.log("エラー: パスワードが一致しません");
+          return {
+            success: false,
+            error: "パスワードが正しくありません。",
+          };
+        }
+      } catch (error) {
+        console.error("注文ロック解除エラー:", error);
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "不明なエラーが発生しました",
+        };
+      }
+    }
+  );
 }
 
 // データをCSV形式に変換する関数
