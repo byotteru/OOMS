@@ -49,22 +49,59 @@ async function createWindow(): Promise<void> {
 // メイン関数
 async function main(): Promise<void> {
   console.log("Main: Initializing database manager...");
-  // データベースマネージャーの初期化
-  const dbPath = path.join(app.getPath("userData"), "ooms.db");
-  dbManager = await DatabaseManager.getInstance(dbPath);
-  console.log("Main: Database manager initialized successfully");
 
-  // 自動更新の設定
-  setupAutoUpdater();
-  console.log("Main: Auto updater set up successfully");
+  try {
+    // データベースマネージャーの初期化
+    const dbPath = path.join(app.getPath("userData"), "ooms.db");
+    dbManager = DatabaseManager.getInstance(dbPath); // awaitを削除（同期メソッドのため）
+    console.log("Main: Database manager initialized successfully");
+  } catch (error) {
+    console.error("Main: Database initialization failed:", error);
 
-  // IPCハンドラーの設定
-  setupIpcHandlers();
-  console.log("Main: IPC handlers set up successfully");
+    // better-sqlite3の問題の場合、詳細なエラーダイアログを表示
+    if (
+      error instanceof Error &&
+      error.message.includes("NODE_MODULE_VERSION")
+    ) {
+      const errorMsg = `データベースの初期化に失敗しました。\n\n原因: better-sqlite3のバージョン不整合\n\n解決方法:\n1. アプリケーションを終了\n2. ターミナルで以下のコマンドを実行:\n   npm rebuild better-sqlite3\n   または\n   npx electron-rebuild\n\n実行後、アプリケーションを再起動してください。`;
 
-  // メインウィンドウを作成
-  await createWindow();
-  console.log("Main: Main window created successfully");
+      await dialog.showErrorBox("データベースエラー", errorMsg);
+    } else {
+      await dialog.showErrorBox(
+        "初期化エラー",
+        `アプリケーションの初期化に失敗しました。\n\nエラー: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
+    // アプリケーションを終了
+    app.quit();
+    return;
+  }
+
+  try {
+    // 自動更新の設定
+    setupAutoUpdater();
+    console.log("Main: Auto updater set up successfully");
+
+    // IPCハンドラーの設定
+    setupIpcHandlers();
+    console.log("Main: IPC handlers set up successfully");
+
+    // メインウィンドウを作成
+    await createWindow();
+    console.log("Main: Main window created successfully");
+  } catch (error) {
+    console.error("Main: Application setup failed:", error);
+    await dialog.showErrorBox(
+      "起動エラー",
+      `アプリケーションの起動に失敗しました。\n\nエラー: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    app.quit();
+  }
 }
 
 // 自動更新の設定とイベントハンドラー
@@ -523,25 +560,21 @@ function setupIpcHandlers(): void {
   ipcMain.handle("delete-user", async (_, id: number) => {
     try {
       const db = ensureDbManager();
-      db.deleteUser(id); // awaitを削除（同期メソッドになったため）
-      return { success: true };
+
+      // 削除前に注文データ数を確認
+      const orderCheck = db.checkUserHasOrders(id);
+
+      db.deleteUser(id); // 同期メソッド
+
+      return {
+        success: true,
+        orderCount: orderCheck.count,
+        message: orderCheck.hasOrders
+          ? `スタッフを削除しました。関連する注文データ ${orderCheck.count} 件も削除されました。`
+          : "スタッフを削除しました。",
+      };
     } catch (error) {
       console.error("ユーザー削除エラー:", error);
-
-      // USER_HAS_ORDERS エラーの特別処理
-      if (
-        error instanceof Error &&
-        error.message.startsWith("USER_HAS_ORDERS:")
-      ) {
-        const orderCount = error.message.split(":")[1];
-        return {
-          success: true,
-          warning: true,
-          message: `このスタッフには${orderCount}件の注文データが関連付けられています。スタッフは無効化されましたが、過去の注文データは保持されます。`,
-          orderCount: Number(orderCount),
-        };
-      }
-
       throw error;
     }
   });

@@ -85,7 +85,7 @@ global.window.api = {
   getUsers: vi.fn().mockResolvedValue(mockUsers),
   addUser: vi.fn().mockResolvedValue(undefined),
   updateUser: vi.fn().mockResolvedValue(undefined),
-  deleteUser: vi.fn().mockResolvedValue(undefined),
+  deleteUser: vi.fn().mockResolvedValue({ success: true }),
 
   // スタッフ関連（後方互換性）
   getStaff: vi.fn().mockResolvedValue(mockStaff),
@@ -106,7 +106,7 @@ global.window.api = {
   addOrder: vi.fn().mockResolvedValue(undefined),
   cancelOrder: vi.fn().mockResolvedValue(undefined),
   deleteOrder: vi.fn().mockResolvedValue(undefined),
-  saveWeeklyOrders: vi.fn().mockResolvedValue(undefined),
+  saveWeeklyOrders: vi.fn().mockResolvedValue({ success: true }),
 
   // 注文ロック関連
   lockOrders: vi.fn().mockResolvedValue({ success: true }),
@@ -163,7 +163,7 @@ global.window.api = {
   lockMonth: vi.fn().mockResolvedValue(undefined),
 
   // 監査ログ
-  getAuditLogs: vi.fn().mockResolvedValue([]),
+  getAuditLogs: vi.fn().mockResolvedValue({ logs: [], total: 0 }),
 
   // 設定関連
   getSettings: vi.fn().mockResolvedValue(mockSettings),

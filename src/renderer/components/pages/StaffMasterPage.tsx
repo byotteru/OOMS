@@ -12,27 +12,37 @@ import Modal from "../ui/Modal";
 
 interface StaffFormData {
   name: string;
-  is_active: number;
   display_order?: number;
 }
 
-const StaffMasterPage: React.FC = () => {
+function StaffMasterPage() {
   const { staffList, isLoading, refreshStaff } = useAppContext();
   const [showModal, setShowModal] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [formData, setFormData] = useState<StaffFormData>({
     name: "",
-    is_active: 1,
     display_order: 0,
+  });
+
+  // 表示順に基づいてソートされたスタッフリストを作成
+  const sortedStaffList = [...staffList].sort((a, b) => {
+    const orderA = a.display_order !== undefined ? a.display_order : 9999;
+    const orderB = b.display_order !== undefined ? b.display_order : 9999;
+    return orderA - orderB;
   });
 
   // モーダルを開く（新規追加）
   const handleAddStaff = () => {
     setEditingStaff(null);
+    // 新規スタッフの表示順は最後尾+1に設定
+    const maxOrder =
+      staffList.length > 0
+        ? Math.max(...staffList.map((staff) => staff.display_order || 0))
+        : 0;
+    console.log(`新規スタッフの表示順: ${maxOrder + 1}`);
     setFormData({
       name: "",
-      is_active: 1,
-      display_order: staffList.length + 1,
+      display_order: maxOrder + 1,
     });
     setShowModal(true);
   };
@@ -42,7 +52,6 @@ const StaffMasterPage: React.FC = () => {
     setEditingStaff(staff);
     setFormData({
       name: staff.name,
-      is_active: staff.is_active,
       display_order: staff.display_order || 0,
     });
     setShowModal(true);
@@ -52,6 +61,80 @@ const StaffMasterPage: React.FC = () => {
   const handleCloseModal = () => {
     setShowModal(false);
     setEditingStaff(null);
+  };
+
+  // 表示順を上げる（1つ上に移動）
+  const handleMoveUp = async (staff: Staff) => {
+    // 表示順でソートされたリストでの現在の位置を取得
+    const currentIndex = sortedStaffList.findIndex((s) => s.id === staff.id);
+    if (currentIndex <= 0) return; // 既に一番上なら何もしない
+
+    const prevStaff = sortedStaffList[currentIndex - 1];
+    const currentOrder = staff.display_order || 0;
+    const prevOrder = prevStaff.display_order || 0;
+
+    try {
+      console.log(
+        `移動前: ${staff.name}(${currentOrder}) と ${prevStaff.name}(${prevOrder}) を交換`
+      );
+
+      // 表示順を交換
+      await window.api.updateStaff(staff.id, staff.name, 1, prevOrder);
+
+      await window.api.updateStaff(
+        prevStaff.id,
+        prevStaff.name,
+        1,
+        currentOrder
+      );
+
+      console.log(
+        `移動後: ${staff.name}(${prevOrder}) と ${prevStaff.name}(${currentOrder})`
+      );
+      await showApiSuccess("表示順を変更しました");
+      await refreshStaff();
+    } catch (error) {
+      const apiError = handleApiError(error);
+      console.error("表示順の変更に失敗しました:", apiError);
+      await showApiError(apiError);
+    }
+  };
+
+  // 表示順を下げる（1つ下に移動）
+  const handleMoveDown = async (staff: Staff) => {
+    // 表示順でソートされたリストでの現在の位置を取得
+    const currentIndex = sortedStaffList.findIndex((s) => s.id === staff.id);
+    if (currentIndex >= sortedStaffList.length - 1) return; // 既に一番下なら何もしない
+
+    const nextStaff = sortedStaffList[currentIndex + 1];
+    const currentOrder = staff.display_order || 0;
+    const nextOrder = nextStaff.display_order || 0;
+
+    try {
+      console.log(
+        `移動前: ${staff.name}(${currentOrder}) と ${nextStaff.name}(${nextOrder}) を交換`
+      );
+
+      // 表示順を交換
+      await window.api.updateStaff(staff.id, staff.name, 1, nextOrder);
+
+      await window.api.updateStaff(
+        nextStaff.id,
+        nextStaff.name,
+        1,
+        currentOrder
+      );
+
+      console.log(
+        `移動後: ${staff.name}(${nextOrder}) と ${nextStaff.name}(${currentOrder})`
+      );
+      await showApiSuccess("表示順を変更しました");
+      await refreshStaff();
+    } catch (error) {
+      const apiError = handleApiError(error);
+      console.error("表示順の変更に失敗しました:", apiError);
+      await showApiError(apiError);
+    }
   };
 
   // フォーム送信
@@ -72,7 +155,7 @@ const StaffMasterPage: React.FC = () => {
         await window.api.updateStaff(
           editingStaff.id,
           formData.name.trim(),
-          formData.is_active,
+          1, // 常に有効状態（1）を設定
           formData.display_order
         );
         await showApiSuccess("スタッフ情報を更新しました");
@@ -93,11 +176,13 @@ const StaffMasterPage: React.FC = () => {
     }
   };
 
-  // スタッフ削除（無効化）
+  // スタッフ完全削除処理
   const handleDeleteStaff = async (staff: Staff) => {
     console.log("🗑️ スタッフ削除開始:", { id: staff.id, name: staff.name });
 
-    const confirmed = confirm(`「${staff.name}」を削除（無効化）しますか？`);
+    const confirmed = confirm(
+      `「${staff.name}」を完全に削除しますか？\n\n⚠️ 注意：\n・このスタッフの注文データもすべて削除されます\n・週間発注書から該当データが削除されます\n・この操作は元に戻せません\n\n削除を実行しますか？`
+    );
     if (!confirmed) {
       console.log("❌ ユーザーがキャンセルしました");
       return;
@@ -108,76 +193,27 @@ const StaffMasterPage: React.FC = () => {
     try {
       console.log("🔄 deleteUser API呼び出し開始...", staff.id);
 
-      // staff.id を使って、新しい deleteUser API を呼び出す
+      // staff.id を使って、完全削除APIを呼び出す
       const result = await window.api.deleteUser(staff.id);
 
       console.log("✅ deleteUser API呼び出し成功", result);
 
-      // 注文データがある場合は警告を表示
-      if (result.warning) {
-        await window.api.showInfoDialog(
-          "注意",
-          result.message || "このスタッフには関連する注文データがあります。"
-        );
-      }
+      // 削除成功メッセージを表示
+      const message =
+        result.orderCount && result.orderCount > 0
+          ? `スタッフ「${staff.name}」を削除しました。\n関連する注文データ ${result.orderCount} 件も削除されました。`
+          : `スタッフ「${staff.name}」を削除しました。`;
 
-      await showApiSuccess("スタッフを無効化しました");
+      await showApiSuccess(message);
 
       console.log("🔄 refreshStaff呼び出し開始...");
-      await refreshStaff(); // 設計書通りの状態同期
+      await refreshStaff(); // データを再読み込み
 
       console.log("✅ refreshStaff完了 - スタッフ一覧更新済み");
     } catch (error) {
       console.error("❌ スタッフ削除処理でエラーが発生:", error);
       const apiError = handleApiError(error);
-      console.error("スタッフの無効化に失敗しました:", apiError);
-      await showApiError(apiError);
-    }
-  };
-
-  // ステータス切り替え
-  const handleToggleStatus = async (staff: Staff) => {
-    console.log("🔄 無効化/有効化ボタンがクリックされました:", {
-      id: staff.id,
-      name: staff.name,
-    });
-    const newStatus = staff.is_active ? 0 : 1;
-    try {
-      // ユーザーテーブルの更新に切り替え - deleteUserで論理削除を行う
-      if (newStatus === 0) {
-        console.log("🔄 deleteUser API呼び出し開始...", staff.id);
-        const result = await window.api.deleteUser(staff.id);
-        console.log("✅ deleteUser API呼び出し成功", result);
-
-        // 注文データがある場合は警告を表示
-        if (result.warning) {
-          await window.api.showInfoDialog(
-            "注意",
-            result.message || "このスタッフには関連する注文データがあります。"
-          );
-        }
-      } else {
-        // 有効化の場合はupdateStaffを使用（ユーザーの有効化はupdateUserで行うべきだが
-        // 既存コードとの互換性のため残す）
-        console.log("🔄 updateStaff API呼び出し開始...", staff.id);
-        await window.api.updateStaff(
-          staff.id,
-          staff.name,
-          newStatus,
-          staff.display_order
-        );
-        console.log("✅ updateStaff API呼び出し成功");
-      }
-
-      await showApiSuccess(
-        newStatus === 0
-          ? "スタッフを無効化しました"
-          : "スタッフを有効化しました"
-      );
-      await refreshStaff(); // 設計書通りの状態同期
-    } catch (error) {
-      const apiError = handleApiError(error);
-      console.error("ステータス更新に失敗しました:", apiError);
+      console.error("スタッフの削除に失敗しました:", apiError);
       await showApiError(apiError);
     }
   };
@@ -212,64 +248,71 @@ const StaffMasterPage: React.FC = () => {
                   <th>ID</th>
                   <th>スタッフ名</th>
                   <th>表示順</th>
-                  <th>状態</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
-                {staffList
-                  .sort(
-                    (a, b) => (a.display_order || 0) - (b.display_order || 0)
-                  )
-                  .map((staff) => (
-                    <tr key={staff.id}>
-                      <td>{staff.id}</td>
-                      <td>{staff.name}</td>
-                      <td>{staff.display_order || "-"}</td>
-                      <td>
-                        <span
-                          className={`status-badge ${
-                            staff.is_active
-                              ? "status-active"
-                              : "status-inactive"
-                          }`}
-                        >
-                          {staff.is_active ? "有効" : "無効"}
-                        </span>
-                      </td>
-                      <td>
+                {sortedStaffList.map((staff, index) => (
+                  <tr key={staff.id}>
+                    <td>{staff.id}</td>
+                    <td>{staff.name}</td>
+                    <td>
+                      {staff.display_order || "-"}
+                      <div className="d-flex mt-1">
                         <Button
                           variant="secondary"
                           size="small"
-                          onClick={() => handleEditStaff(staff)}
-                          className="mr-2"
+                          onClick={() => {
+                            console.log(
+                              `↑ボタンクリック: ${staff.name} (現在位置: ${index})`
+                            );
+                            handleMoveUp(staff);
+                          }}
+                          disabled={index === 0}
+                          className="mr-1"
                         >
-                          編集
+                          ↑
                         </Button>
                         <Button
-                          variant="warning"
-                          size="small"
-                          onClick={() => handleToggleStatus(staff)}
-                          className="mr-2"
-                        >
-                          {staff.is_active ? "無効化" : "有効化"}
-                        </Button>
-                        <Button
-                          variant="danger"
+                          variant="secondary"
                           size="small"
                           onClick={() => {
-                            console.log("🖱️ 削除ボタンがクリックされました:", {
-                              id: staff.id,
-                              name: staff.name,
-                            });
-                            handleDeleteStaff(staff);
+                            console.log(
+                              `↓ボタンクリック: ${staff.name} (現在位置: ${index})`
+                            );
+                            handleMoveDown(staff);
                           }}
+                          disabled={index === sortedStaffList.length - 1}
                         >
-                          削除
+                          ↓
                         </Button>
-                      </td>
-                    </tr>
-                  ))}
+                      </div>
+                    </td>
+                    <td>
+                      <Button
+                        variant="secondary"
+                        size="small"
+                        onClick={() => handleEditStaff(staff)}
+                        className="mr-2"
+                      >
+                        編集
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="small"
+                        onClick={() => {
+                          console.log("🖱️ 削除ボタンがクリックされました:", {
+                            id: staff.id,
+                            name: staff.name,
+                          });
+                          handleDeleteStaff(staff);
+                        }}
+                      >
+                        削除
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -308,22 +351,9 @@ const StaffMasterPage: React.FC = () => {
                 })
               }
             />
-          </div>
-          <div className="form-group">
-            <label className="form-label">状態</label>
-            <select
-              className="form-control"
-              value={formData.is_active}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  is_active: Number(e.target.value),
-                })
-              }
-            >
-              <option value={1}>有効</option>
-              <option value={0}>無効</option>
-            </select>
+            <small className="form-text text-muted">
+              表示順は↑↓ボタンでも変更できます。スタッフリストは表示順に従って自動的にソートされます。
+            </small>
           </div>
           <div className="modal-footer">
             <Button variant="secondary" onClick={handleCloseModal}>
@@ -337,6 +367,6 @@ const StaffMasterPage: React.FC = () => {
       </Modal>
     </>
   );
-};
+}
 
 export default StaffMasterPage;

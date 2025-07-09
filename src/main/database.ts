@@ -189,15 +189,33 @@ export class DatabaseManager {
   private static createInstance(dbPath: string): DatabaseManager {
     console.log("DatabaseManager: Creating new instance...");
     const instance = new DatabaseManager(dbPath);
-    console.log("DatabaseManager: Connecting to database...");
-    instance.connect(); // 同期的なconnect
-    console.log("DatabaseManager: Initializing database...");
-    instance.initializeDatabase(); // 同期的なinitializeDatabase
-    console.log(
-      "DatabaseManager: Database initialization completed successfully!"
-    );
-    DatabaseManager.instance = instance;
-    return instance;
+
+    try {
+      console.log("DatabaseManager: Connecting to database...");
+      instance.connect(); // 同期的なconnect
+      console.log("DatabaseManager: Initializing database...");
+      instance.initializeDatabase(); // 同期的なinitializeDatabase
+      console.log(
+        "DatabaseManager: Database initialization completed successfully!"
+      );
+      DatabaseManager.instance = instance;
+      return instance;
+    } catch (error) {
+      console.error("DatabaseManager: Initialization failed:", error);
+
+      // better-sqlite3の問題の場合、詳細なエラーメッセージを提供
+      if (
+        error instanceof Error &&
+        error.message.includes("NODE_MODULE_VERSION")
+      ) {
+        console.error("✕ better-sqlite3のバージョン不整合が発生しました。");
+        console.error(
+          "解決方法: npm rebuild better-sqlite3 または npx electron-rebuild を実行してください。"
+        );
+      }
+
+      throw error;
+    }
   }
 
   private connect(): void {
@@ -211,6 +229,31 @@ export class DatabaseManager {
       console.log("データベースに接続しました");
     } catch (err) {
       console.error("データベース接続エラー:", err);
+
+      // better-sqlite3の一般的な問題の詳細なエラーメッセージ
+      if (err instanceof Error) {
+        if (err.message.includes("NODE_MODULE_VERSION")) {
+          console.error(
+            "✕ better-sqlite3がElectronのNode.jsバージョンと互換性がありません。"
+          );
+          console.error("現在のNode.js:", process.version);
+          console.error("Electronのバージョン:", process.versions.electron);
+          console.error("解決方法1: npm run electron:rebuild");
+          console.error("解決方法2: npx electron-rebuild --force");
+          console.error(
+            "解決方法3: rm -rf node_modules/better-sqlite3 && npm install better-sqlite3 && npx electron-rebuild"
+          );
+        } else if (err.message.includes("database is locked")) {
+          console.error(
+            "✕ データベースがロックされています。他のプロセスが使用している可能性があります。"
+          );
+        } else if (err.message.includes("no such file")) {
+          console.error(
+            "✕ データベースファイルが見つかりません。新しいデータベースを作成します。"
+          );
+        }
+      }
+
       throw err;
     }
   }
@@ -661,7 +704,9 @@ export class DatabaseManager {
       FROM orders o
       JOIN order_details od ON o.id = od.order_id
       JOIN items i ON od.item_id = i.id
+      JOIN users u ON o.user_id = u.id
       WHERE o.order_date BETWEEN ? AND ?
+        AND u.is_active = 1
       GROUP BY o.order_date, i.name
       ORDER BY i.display_order, i.name, o.order_date
     `;
@@ -760,6 +805,7 @@ export class DatabaseManager {
       JOIN order_details od ON o.id = od.order_id
       JOIN items i ON od.item_id = i.id
       WHERE strftime('%Y-%m', o.order_date) = ?
+        AND u.is_active = 1
       GROUP BY u.id, u.name
       ORDER BY u.display_order, u.name
     `;
@@ -906,44 +952,55 @@ export class DatabaseManager {
   saveWeeklyOrders(payload: WeeklySavePayload): void {
     const { orders, staffIdsOnScreen, weekStart, weekEnd } = payload;
 
-    // 画面にスタッフが一人も表示されていない場合は何もしない
-    if (staffIdsOnScreen.length === 0) {
-      console.log("保存対象のスタッフがいません。");
-      return;
-    }
-
     // トランザクション開始
     const transaction = this.db.transaction(() => {
-      // ステップ1：これから操作する範囲の、既存の注文IDをすべて取得
-      const targetOrderIdsResult = this.all(
-        // IN句を安全に組み立てる
-        `SELECT id FROM orders WHERE user_id IN (${staffIdsOnScreen
-          .map(() => "?")
-          .join(",")}) AND order_date BETWEEN ? AND ?`,
-        [...staffIdsOnScreen, weekStart, weekEnd]
+      // ステップ1：指定された週の範囲の既存注文IDをすべて取得（すべてのスタッフ対象）
+      const allExistingOrderIds = this.all(
+        `SELECT id FROM orders WHERE order_date BETWEEN ? AND ?`,
+        [weekStart, weekEnd]
       );
 
-      if (targetOrderIdsResult.length > 0) {
-        const idsToDelete = targetOrderIdsResult.map((row) => row.id);
+      if (allExistingOrderIds.length > 0) {
+        const idsToDelete = allExistingOrderIds.map((row) => row.id);
+
+        console.log(
+          `週間注文保存: ${weekStart} から ${weekEnd} の既存注文 ${idsToDelete.length} 件を削除します`
+        );
 
         // ステップ2：既存の注文を、関連テーブルから順番に「すべて削除」する
-        // まずは子テーブル (order_details) から削除
+        // 2-1. 注文詳細オプションを削除
+        this.run(
+          `DELETE FROM order_detail_options 
+           WHERE order_detail_id IN (
+             SELECT id FROM order_details WHERE order_id IN (${idsToDelete
+               .map(() => "?")
+               .join(",")})
+           )`,
+          idsToDelete
+        );
+
+        // 2-2. 注文詳細を削除
         this.run(
           `DELETE FROM order_details WHERE order_id IN (${idsToDelete
             .map(() => "?")
             .join(",")})`,
           idsToDelete
         );
-        // 次に親テーブル (orders) を削除
+
+        // 2-3. 注文を削除
         this.run(
           `DELETE FROM orders WHERE id IN (${idsToDelete
             .map(() => "?")
             .join(",")})`,
           idsToDelete
         );
+
+        console.log(
+          `週間注文保存: 既存注文データ ${idsToDelete.length} 件を削除しました`
+        );
       }
 
-      // ステップ3：UIの最新の状態に基づいた新しい注文データを「すべて挿入」する
+      // ステップ3：アクティブなスタッフの新しい注文データのみを挿入
       // staff_id と order_date で注文をグループ化
       const ordersToCreate: {
         [key: string]: {
@@ -952,8 +1009,23 @@ export class DatabaseManager {
           details: { item_id: number; quantity: number }[];
         };
       } = {};
+
+      // 新しい注文データを処理する前に、スタッフがアクティブかどうか確認
+      const activeStaffIds = new Set(
+        this.all("SELECT id FROM users WHERE is_active = 1").map(
+          (row) => row.id
+        )
+      );
+
       for (const order of orders) {
-        // キーの区切り文字を変更してハイフン問題を回避
+        // 削除されたスタッフの注文データはスキップ
+        if (!activeStaffIds.has(order.staff_id)) {
+          console.log(
+            `週間注文保存: 削除されたスタッフ (ID: ${order.staff_id}) の注文データをスキップします`
+          );
+          continue;
+        }
+
         const key = `${order.staff_id}|${order.order_date}`;
         if (!ordersToCreate[key]) {
           ordersToCreate[key] = {
@@ -969,6 +1041,7 @@ export class DatabaseManager {
       }
 
       // グループ化した注文をDBに挿入
+      let insertedOrdersCount = 0;
       for (const key in ordersToCreate) {
         const order = ordersToCreate[key];
 
@@ -984,13 +1057,20 @@ export class DatabaseManager {
             [newOrderId, detail.item_id, detail.quantity]
           );
         }
+        insertedOrdersCount++;
       }
+
+      console.log(
+        `週間注文保存: 新しい注文データ ${insertedOrdersCount} 件を挿入しました`
+      );
     });
 
     // トランザクション実行
     try {
       transaction();
-      console.log("週間注文を正常に保存しました。");
+      console.log(
+        "週間注文を正常に保存しました。削除されたスタッフのデータは除外されました。"
+      );
     } catch (error) {
       console.error("週間注文の保存に失敗しました:", error);
       throw error;
@@ -1139,32 +1219,61 @@ export class DatabaseManager {
 
     // トランザクション開始
     const transaction = this.db.transaction(() => {
-      // 物理削除ではなく論理削除（is_activeを0に設定）
-      this.run("UPDATE users SET is_active = 0 WHERE id = ?", [id]);
-
-      // 注文データが存在する場合、ユーザー名に（削除済み）を追加
       if (orderCheck.hasOrders) {
-        this.run("UPDATE users SET name = ? WHERE id = ?", [
-          `${user.name}（削除済み）`,
-          id,
-        ]);
+        // 注文データが存在する場合の処理
+        console.log(
+          `警告: ユーザー ${user.name} (ID: ${id}) には ${orderCheck.count} 件の注文データがあります`
+        );
+
+        // 1. 関連する注文データを段階的に削除
+        // 1-1. 注文詳細オプションを削除
+        this.run(
+          `
+          DELETE FROM order_detail_options 
+          WHERE order_detail_id IN (
+            SELECT od.id FROM order_details od 
+            JOIN orders o ON od.order_id = o.id 
+            WHERE o.user_id = ?
+          )
+        `,
+          [id]
+        );
+
+        // 1-2. 注文詳細を削除
+        this.run(
+          `
+          DELETE FROM order_details 
+          WHERE order_id IN (
+            SELECT id FROM orders WHERE user_id = ?
+          )
+        `,
+          [id]
+        );
+
+        // 1-3. 注文を削除
+        this.run("DELETE FROM orders WHERE user_id = ?", [id]);
+
+        console.log(
+          `削除完了: ユーザー ${user.name} の注文データ ${orderCheck.count} 件を削除しました`
+        );
       }
 
-      // 監査ログに記録
-      this.addAuditLog(null, "USER_DEACTIVATE", "users", id, {
-        deactivated_user: user,
+      // 2. ユーザーを論理削除（is_activeを0に設定）
+      this.run("UPDATE users SET is_active = 0 WHERE id = ?", [id]);
+
+      // 3. 監査ログに記録
+      this.addAuditLog(null, "USER_DELETE_WITH_ORDERS", "users", id, {
+        deleted_user: user,
         had_orders: orderCheck.hasOrders,
         order_count: orderCheck.count,
+        orders_deleted: orderCheck.hasOrders,
       });
     });
 
     // トランザクション実行
     transaction();
 
-    // 注文データがある場合は例外をスローして通知
-    if (orderCheck.hasOrders) {
-      throw new Error(`USER_HAS_ORDERS:${orderCheck.count}`);
-    }
+    console.log(`ユーザー削除完了: ${user.name} (ID: ${id})`);
   }
 
   // 監査ログ関連
@@ -1341,7 +1450,10 @@ export class DatabaseManager {
         o.status
       FROM orders o
       JOIN order_details od ON o.id = od.order_id
-      WHERE o.order_date BETWEEN ? AND ?
+      JOIN users u ON o.user_id = u.id
+      WHERE o.order_date BETWEEN ? AND ? 
+        AND u.is_active = 1
+      ORDER BY o.order_date, o.user_id
     `;
 
     return this.all(sql, [startDate, endDate]);

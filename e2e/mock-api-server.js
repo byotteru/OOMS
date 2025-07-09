@@ -1,22 +1,9 @@
 const express = require("express");
 const path = require("path");
 const app = express();
+const cors = require("cors");
 
-// Enable CORS for all routes
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-  );
-  if (req.method === "OPTIONS") {
-    res.sendStatus(200);
-  } else {
-    next();
-  }
-});
-
+app.use(cors());
 app.use(express.json());
 
 // Serve static files from out/renderer
@@ -67,7 +54,7 @@ app.post("/api/orders", (req, res) => {
 });
 
 // Fallback to index.html for SPA routes
-app.get("*", (req, res) => {
+app.get("/*", (req, res) => {
   res.sendFile(path.join(__dirname, "..", "out", "renderer", "index.html"));
 });
 
